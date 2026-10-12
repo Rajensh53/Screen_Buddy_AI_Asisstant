@@ -1,9 +1,12 @@
+mod selection;
 mod tray;
 mod windows;
 
 use std::sync::atomic::AtomicBool;
 
-/// State shared between the tray and (later) the selection pipeline.
+use tauri::RunEvent;
+
+/// State shared between the tray and the selection pipeline.
 #[derive(Default)]
 pub(crate) struct AppState {
     pub paused: AtomicBool,
@@ -11,15 +14,25 @@ pub(crate) struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(AppState::default())
         .setup(|app| {
             let handle = app.handle();
             crate::windows::mascot::setup(handle)?;
             crate::windows::settings::setup(handle)?;
             tray::setup(handle)?;
+            // The app still runs without selection reading, so log instead of failing.
+            if let Err(err) = selection::start(handle.clone()) {
+                eprintln!("[selection] not started: {err}");
+            }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Screen Buddy");
+        .build(tauri::generate_context!())
+        .expect("error while building Screen Buddy");
+
+    app.run(|_app, event| {
+        if let RunEvent::Exit = event {
+            selection::stop();
+        }
+    });
 }
