@@ -1,0 +1,35 @@
+:root {
+  color-scheme: light dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: #1f2937;
+  background: #f9fafb;
+}
+
+body {
+  margin: 0;
+}
+
+.settings {
+  padding: 24px;
+}
+
+.settings h1 {
+  margin: 0 0 12px;
+  font-size: 22px;
+}
+
+.settings__version {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #e5e7eb;
+    background: #202124;
+  }
+
+  .settings__version {
+    color: #9ca3af;
+  }
+}

@@ -1,0 +1,37 @@
+# English words
+ubiquitous
+mitigate
+leverage
+idempotent
+deprecated
+nuance
+cumbersome
+latency
+
+# English sentences
+The proposal was shelved pending further review.
+This endpoint is rate-limited to prevent abuse.
+She took the feedback with a grain of salt.
+The firmware update bricked several devices in the field.
+Payment will be released upon milestone completion.
+We need to circle back on this before the deadline.
+The model hallucinates when the context window overflows.
+Despite the setbacks, the team stayed the course.
+
+# Urdu
+یہ معاملہ ابھی زیرِ غور ہے
+براہ کرم اپنی درخواست مقررہ تاریخ سے پہلے جمع کروائیں
+اس منصوبے کی تکمیل میں تاخیر متوقع ہے
+وہ اپنی بات پر قائم رہا
+بجلی کی لوڈشیڈنگ نے کاروبار کو متاثر کیا
+اعتماد
+ناگزیر
+
+# Roman Urdu
+yaar ye feature abhi kaam nahi kar raha
+kal tak delivery ho jayegi inshallah
+mujhe is cheez ka matlab samajh nahi aaya
+client ne payment hold pe rakh di hai
+bohat zabardast kaam kiya hai tumne
+thora sabar karo sab theek ho jayega
+jugaar

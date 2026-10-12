@@ -1,0 +1,26 @@
+.popup {
+  margin: 6px;
+  height: calc(100% - 12px);
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.97);
+  color: #1f2937;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  overflow-y: auto;
+}
+
+.popup__text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .popup {
+    background: rgba(32, 33, 36, 0.97);
+    color: #e5e7eb;
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+}
