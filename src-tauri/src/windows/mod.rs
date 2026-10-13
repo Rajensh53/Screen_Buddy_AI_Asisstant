@@ -3,6 +3,7 @@
 //!
 //! This module shares its name with the `windows` crate: refer to the crate as `::windows`.
 
+pub mod flight;
 pub mod mascot;
 pub mod placement;
 pub mod popup;

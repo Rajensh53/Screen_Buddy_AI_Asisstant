@@ -1,156 +1,646 @@
-/* Placeholder character until real art exists (Rive later). */
+/* Screen Buddy's robot (Robot.tsx). Every state is CSS only: transforms and opacity, which are
+   cheap and smooth. SVG transforms use view-box coordinates (the 140x140 drawing). */
+
 .mascot {
+  position: relative;
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+}
+
+/* Transparent layer above the drawing: every pixel drags the mascot and gets the right-click menu. */
+.mascot__hit {
+  position: absolute;
+  inset: 0;
   cursor: grab;
-  transition: opacity 200ms ease, filter 200ms ease;
 }
 
-.mascot__body {
-  position: relative;
-  width: 96px;
-  height: 88px;
-  border-radius: 48% 48% 44% 44%;
-  background: radial-gradient(circle at 35% 30%, #a7f3d0, #34d399 60%, #059669);
-  box-shadow: inset -6px -8px 0 rgba(0, 0, 0, 0.08);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+.robot {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transition: opacity 300ms ease;
 }
 
-.mascot--idle .mascot__body {
-  animation: breathe 3.2s ease-in-out infinite;
+/* --- Parts --- */
+
+.robot__shell {
+  fill: url(#sb-shell);
+  stroke: #1e293b;
+  stroke-width: 2.5;
 }
 
-.mascot__eyes {
-  display: flex;
-  gap: 18px;
+.robot__neck {
+  fill: #cbd5e1;
+  stroke: #1e293b;
+  stroke-width: 2;
 }
 
-.mascot__eye {
-  width: 12px;
-  height: 16px;
-  border-radius: 50%;
-  background: #1f2937;
-  animation: blink 5s infinite;
+.robot__ear {
+  fill: #2563eb;
+  stroke: #1e293b;
+  stroke-width: 2.5;
 }
 
-.mascot__mouth {
-  width: 18px;
-  height: 8px;
-  border-bottom: 3px solid #1f2937;
-  border-radius: 0 0 12px 12px;
+.robot__visor {
+  fill: url(#sb-visor);
+  stroke: #1e293b;
+  stroke-width: 2;
 }
 
-/* noticed: a quick hop with wide eyes */
-.mascot--noticed .mascot__body {
-  animation: hop 300ms ease-out;
+.robot__visor-shine,
+.robot__lens-shine {
+  fill: none;
+  stroke: #ffffff;
+  stroke-opacity: 0.22;
+  stroke-width: 2.5;
+  stroke-linecap: round;
 }
 
-.mascot--noticed .mascot__eye {
-  animation: none;
-  transform: scale(1.25);
+.robot__line {
+  stroke: #1e293b;
+  stroke-width: 2.5;
+  stroke-linecap: round;
 }
 
-/* thinking: eyes look up, slow wobble */
-.mascot--thinking .mascot__body {
-  animation: wobble 1.6s ease-in-out infinite;
+.robot__spark,
+.robot__chest-light {
+  fill: #38bdf8;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: fill 300ms ease;
 }
 
-.mascot--thinking .mascot__eyes {
-  transform: translateY(-5px);
+.robot__chest {
+  fill: #0f172a;
+  stroke: #38bdf8;
+  stroke-width: 2.5;
+  transition: stroke 300ms ease;
 }
 
-/* talking: the mouth opens and closes */
-.mascot--talking .mascot__mouth {
-  animation: talk 240ms ease-in-out infinite alternate;
+.eyes {
+  fill: #38bdf8;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
-/* cant_read: flat eyes and a little grey, kept subtle */
-.mascot--cant_read .mascot__eye {
-  height: 3px;
-  border-radius: 2px;
-  animation: none;
+.eyes--stroke {
+  fill: none;
+  stroke: #38bdf8;
+  stroke-width: 3.5;
+  stroke-linecap: round;
 }
 
-.mascot--cant_read .mascot__body {
-  filter: grayscale(0.5);
+.eyes--half {
+  fill: #38bdf8;
+  fill-opacity: 0.55;
 }
 
-.mascot__eyes,
-.mascot__eye {
-  transition: transform 150ms ease, height 150ms ease;
+.eyes__glint {
+  fill: #e0f2fe;
 }
 
-.mascot--paused {
-  opacity: 0.45;
-  filter: grayscale(0.8);
+.robot__blush {
+  fill: #f472b6;
+  opacity: 0;
+  transition: opacity 200ms ease;
 }
 
-.mascot--paused .mascot__body,
-.mascot--paused .mascot__eye {
-  animation: none;
+.robot__mouth {
+  fill: none;
+  stroke: #38bdf8;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
-@keyframes breathe {
-  0%,
-  100% {
-    transform: translateY(0) scale(1, 1);
-  }
-  50% {
-    transform: translateY(-3px) scale(1.02, 0.98);
-  }
+.robot__handle {
+  stroke: #1e293b;
+  stroke-width: 4.5;
+  stroke-linecap: round;
 }
 
-@keyframes hop {
+.robot__lens {
+  fill: url(#sb-lens);
+  stroke: #1e293b;
+  stroke-width: 3;
+}
+
+.robot__magnifier,
+.robot__question,
+.robot__zzz,
+.badge {
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.robot__magnifier {
+  transform-box: view-box;
+  transform-origin: 99px 90px;
+}
+
+.robot__question {
+  fill: #38bdf8;
+  font: 700 22px "Segoe UI", system-ui, sans-serif;
+  filter: url(#sb-glow);
+}
+
+.robot__z {
+  fill: #93c5fd;
+  font: 700 12px "Segoe UI", system-ui, sans-serif;
+}
+
+.robot__z--1 {
+  font-size: 10px;
+}
+
+.robot__z--3 {
+  font-size: 14px;
+}
+
+.robot__head {
+  transform-box: view-box;
+  transform-origin: 70px 74px;
+  transition: transform 250ms ease;
+}
+
+.robot__float {
+  transform-box: view-box;
+  transform-origin: 70px 116px;
+}
+
+/* --- Badges (situation reactions) --- */
+
+.badge {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.badge__shackle {
+  fill: none;
+  stroke: #38bdf8;
+  stroke-width: 2.4;
+}
+
+.badge__lock-body {
+  fill: #38bdf8;
+  stroke: #0f172a;
+  stroke-width: 1.5;
+}
+
+.badge__keyhole {
+  fill: #0f172a;
+}
+
+.badge__no-ring {
+  fill: #f43f5e;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+.badge__no-bar {
+  fill: #ffffff;
+}
+
+.badge__warn-triangle {
+  fill: #f59e0b;
+  stroke: #ffffff;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+
+.badge__warn-mark {
+  fill: #0f172a;
+}
+
+.badge__plug-prong {
+  stroke: #1e293b;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.badge__plug-body {
+  fill: #94a3b8;
+  stroke: #1e293b;
+  stroke-width: 1.6;
+}
+
+.badge__plug-cable {
+  fill: none;
+  stroke: #94a3b8;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+
+/* --- Flight: bank, thruster, shadow --- */
+
+.robot__bank {
+  transform-box: view-box;
+  transform-origin: 70px 80px;
+  /* A little overshoot, like leaning into a turn and settling back. */
+  transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.robot--bank-left .robot__bank {
+  transform: rotate(-12deg);
+}
+
+.robot--bank-right .robot__bank {
+  transform: rotate(12deg);
+}
+
+.robot__thruster {
+  opacity: 0;
+  transform: scaleY(0);
+  transform-box: view-box;
+  transform-origin: 70px 113px;
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
+}
+
+.robot__flame {
+  fill: url(#sb-flame);
+  filter: url(#sb-glow);
+}
+
+.robot__flame-core {
+  fill: #e0f2fe;
+  opacity: 0.85;
+}
+
+.robot--flying .robot__thruster {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+.robot--flying .robot__flame {
+  animation: robot-flicker 90ms ease-in-out infinite alternate;
+  transform-box: view-box;
+  transform-origin: 70px 113px;
+}
+
+/* The shadow: smaller, softer and lighter while in the air; back on landing. */
+.robot__shadow-wrap {
+  transform-box: view-box;
+  transform-origin: 70px 129px;
+  transition:
+    transform 300ms ease,
+    opacity 300ms ease;
+}
+
+.robot--flying .robot__shadow-wrap {
+  transform: scale(0.55);
+  opacity: 0.4;
+}
+
+.robot__shadow {
+  fill: #0f172a;
+  opacity: 0.18;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* --- States: which eyes and extras show --- */
+
+.robot--idle .eyes--relaxed,
+.robot--noticed .eyes--wide,
+.robot--thinking .eyes--focused,
+.robot--talking .eyes--happy,
+.robot--cant_read .eyes--puzzled,
+.robot--shy .eyes--sleep,
+.robot--refuse .eyes--focused,
+.robot--warning .eyes--wide,
+.robot--offline .eyes--half {
+  opacity: 1;
+}
+
+.robot--idle .robot__mouth,
+.robot--talking .robot__mouth,
+.robot--shy .robot__mouth {
+  opacity: 1;
+}
+
+.robot--shy .robot__blush {
+  opacity: 0.55;
+}
+
+.robot--noticed .robot__magnifier {
+  opacity: 1;
+}
+
+.robot--noticed .robot__arm--right {
+  opacity: 0;
+}
+
+.robot--cant_read .robot__question,
+.robot--shy .badge--lock,
+.robot--refuse .badge--no,
+.robot--warning .badge--warn,
+.robot--offline .badge--plug {
+  opacity: 1;
+}
+
+.robot--cant_read .robot__head {
+  transform: rotate(-10deg);
+}
+
+/* offline: the antenna spark and chest light go dark */
+.robot--offline .robot__spark,
+.robot--offline .robot__chest-light {
+  fill: #64748b;
+}
+
+.robot--offline .robot__chest {
+  stroke: #64748b;
+}
+
+/* Paused overrides every state's look: sleeping eyes, dimmed, "Zzz". */
+.robot--paused {
+  opacity: 0.62;
+}
+
+.robot--paused .eyes,
+.robot--paused .robot__mouth,
+.robot--paused .robot__magnifier,
+.robot--paused .robot__question,
+.robot--paused .robot__blush,
+.robot--paused .badge {
+  opacity: 0;
+}
+
+.robot--paused .eyes.eyes--sleep,
+.robot--paused .robot__zzz {
+  opacity: 1;
+}
+
+.robot--paused .robot__arm--right {
+  opacity: 1;
+}
+
+.robot--paused .robot__head {
+  transform: none;
+}
+
+.robot--paused .robot__spark,
+.robot--paused .robot__chest-light {
+  fill: #64748b;
+}
+
+/* --- Animations --- */
+
+/* A gentle float (and the shadow breathing with it) in the calm states */
+.robot--idle .robot__float,
+.robot--thinking .robot__float,
+.robot--cant_read .robot__float,
+.robot--shy .robot__float,
+.robot--warning .robot__float,
+.robot--offline .robot__float {
+  animation: robot-float 3.5s ease-in-out infinite;
+}
+
+.robot--idle .robot__shadow,
+.robot--thinking .robot__shadow,
+.robot--cant_read .robot__shadow,
+.robot--shy .robot__shadow,
+.robot--warning .robot__shadow,
+.robot--offline .robot__shadow {
+  animation: robot-shadow 3.5s ease-in-out infinite;
+}
+
+.robot--idle .eyes--relaxed {
+  animation: robot-blink 5s infinite;
+}
+
+/* noticed: a hop, and the magnifier swings up in front of the visor */
+.robot--noticed .robot__float {
+  animation: robot-hop 400ms ease-out;
+}
+
+.robot--noticed .robot__magnifier {
+  animation: robot-magnify 320ms ease-out;
+}
+
+/* thinking: the antenna spark and the chest light pulse */
+.robot--thinking .robot__spark,
+.robot--thinking .robot__chest-light {
+  animation: robot-pulse 1.2s ease-in-out infinite;
+}
+
+/* talking: a light bounce, and the mouth opens and closes */
+.robot--talking .robot__float {
+  animation: robot-bounce 600ms ease-in-out infinite alternate;
+}
+
+.robot--talking .robot__mouth {
+  animation: robot-talk 240ms ease-in-out infinite alternate;
+}
+
+/* reactions: the badge pops in, then bobs */
+.robot--cant_read .robot__question,
+.robot--shy .badge--lock,
+.robot--warning .badge--warn,
+.robot--offline .badge--plug {
+  animation:
+    robot-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    robot-question 1.2s ease-in-out 260ms infinite;
+}
+
+/* refuse: a quick head shake, and the no-entry badge pops in */
+.robot--refuse .robot__head {
+  animation: robot-shake 500ms ease-in-out 2;
+}
+
+.robot--refuse .badge--no {
+  animation: robot-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* paused: slow breathing, and the "Zzz" letters drift up one after the other */
+.robot--paused .robot__float {
+  animation: robot-float 6s ease-in-out infinite;
+}
+
+.robot--paused .robot__shadow {
+  animation: robot-shadow 6s ease-in-out infinite;
+}
+
+.robot--paused .robot__z {
+  animation: robot-z 3s ease-in-out infinite;
+  opacity: 0;
+}
+
+.robot--paused .robot__z--2 {
+  animation-delay: 1s;
+}
+
+.robot--paused .robot__z--3 {
+  animation-delay: 2s;
+}
+
+@keyframes robot-float {
   0%,
   100% {
     transform: translateY(0);
   }
-  40% {
-    transform: translateY(-10px) scale(1.04, 0.96);
+  50% {
+    transform: translateY(-4px);
   }
 }
 
-@keyframes wobble {
+@keyframes robot-shadow {
   0%,
   100% {
-    transform: rotate(-3deg);
+    transform: scaleX(1);
+    opacity: 0.18;
   }
   50% {
-    transform: rotate(3deg);
+    transform: scaleX(0.85);
+    opacity: 0.12;
   }
 }
 
-@keyframes talk {
-  from {
-    height: 4px;
-  }
-  to {
-    height: 12px;
-  }
-}
-
-@keyframes blink {
+@keyframes robot-blink {
   0%,
   94%,
   100% {
     transform: scaleY(1);
   }
   97% {
-    transform: scaleY(0.1);
+    transform: scaleY(0.12);
+  }
+}
+
+@keyframes robot-hop {
+  0% {
+    transform: translateY(0) scale(1, 1);
+  }
+  40% {
+    transform: translateY(-7px) scale(0.97, 1.03);
+  }
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+@keyframes robot-magnify {
+  from {
+    transform: rotate(35deg) translateY(6px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes robot-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 1;
+  }
+}
+
+@keyframes robot-bounce {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes robot-talk {
+  from {
+    transform: scaleY(0.5);
+  }
+  to {
+    transform: scaleY(1.6);
+  }
+}
+
+@keyframes robot-question {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes robot-pop {
+  from {
+    transform: scale(0.3);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@keyframes robot-shake {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  25% {
+    transform: rotate(-7deg);
+  }
+  75% {
+    transform: rotate(7deg);
+  }
+}
+
+@keyframes robot-flicker {
+  from {
+    transform: scaleY(0.88);
+    opacity: 0.85;
+  }
+  to {
+    transform: scaleY(1.08);
+    opacity: 1;
+  }
+}
+
+@keyframes robot-z {
+  0% {
+    opacity: 0;
+    transform: translate(0, 4px);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(4px, -6px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mascot__body,
-  .mascot__eye,
-  .mascot__mouth {
+  .robot *,
+  .robot {
     animation: none !important;
+  }
+
+  .robot__bank {
+    transition: none;
+  }
+
+  .robot--bank-left .robot__bank,
+  .robot--bank-right .robot__bank {
+    transform: none;
+  }
+
+  .robot--paused .robot__z {
+    opacity: 1;
   }
 }

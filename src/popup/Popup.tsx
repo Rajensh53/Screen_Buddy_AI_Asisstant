@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BUDDY_EVENT, type BuddyEvent, type NoticeAction } from "../shared/events";
 import { type AnswerView, parseAnswer, reduce } from "./answer";
+import { CheckIcon, CloseIcon, CopyIcon, RetryIcon } from "./icons";
 
 /** Space around the card (its CSS margin), part of the window size. */
 const OUTER_MARGIN = 12;
@@ -117,17 +118,28 @@ export default function Popup() {
                 {view.title}
               </div>
               {view.status === "done" && (
-                <button type="button" className="popup__icon-button" onClick={copy} title="Copy the answer">
-                  {copied ? "Copied ✓" : "Copy"}
+                <button
+                  type="button"
+                  className={copied ? "popup__icon-button popup__icon-button--done" : "popup__icon-button"}
+                  onClick={copy}
+                  title={copied ? "Copied" : "Copy the answer"}
+                  aria-label={copied ? "Copied" : "Copy the answer"}
+                >
+                  {copied ? <CheckIcon /> : <CopyIcon />}
                 </button>
               )}
-              <button type="button" className="popup__icon-button" onClick={close} aria-label="Close" title="Close">
-                ×
+              <button type="button" className="popup__icon-button" onClick={close} title="Close" aria-label="Close">
+                <CloseIcon />
               </button>
             </div>
 
             {view.status === "thinking" && (
-              <p className="popup__muted">
+              <p className="popup__muted popup__thinking">
+                <span className="popup__dots" aria-hidden="true">
+                  <span />
+                  <span />
+                  <span />
+                </span>
                 {slow ? "Loading the model — the first answer can take a few seconds…" : "Thinking…"}
               </p>
             )}
@@ -145,6 +157,7 @@ export default function Popup() {
               <div className="popup__problem">
                 <p className="popup__error">{view.error}</p>
                 <button type="button" className="popup__action" onClick={retry}>
+                  <RetryIcon />
                   Retry
                 </button>
               </div>

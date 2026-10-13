@@ -50,6 +50,8 @@ pub struct Settings {
     /// and UI Automation only used if that fails. Needs `clipboard_fallback`. The Edge/Chrome PDF
     /// viewer is handled automatically and needn't be listed.
     pub clipboard_first_apps: Vec<String>,
+    /// The mascot flies next to the popup while explaining, and back home when it closes.
+    pub fly_to_selection: bool,
     /// Where the mascot was left. `None`: the bottom-right corner.
     pub mascot_position: Option<Position>,
 }
@@ -63,6 +65,7 @@ impl Default for Settings {
             history_enabled: false,
             clipboard_fallback: true,
             clipboard_first_apps: Vec::new(),
+            fly_to_selection: true,
             mascot_position: None,
         }
     }
@@ -246,6 +249,7 @@ mod tests {
         assert!(s.block_list.contains(&"bitwarden.exe".to_owned()));
         assert!(!s.paused && !s.history_enabled);
         assert!(s.clipboard_fallback);
+        assert!(s.fly_to_selection);
         assert_eq!(s.mascot_position, None);
     }
 
@@ -307,6 +311,7 @@ mod tests {
             "historyEnabled",
             "clipboardFallback",
             "clipboardFirstApps",
+            "flyToSelection",
             "mascotPosition",
         ] {
             assert!(value.get(key).is_some(), "missing {key}");

@@ -10,6 +10,7 @@ interface SettingsData {
   blockList: string[];
   paused: boolean;
   historyEnabled: boolean;
+  flyToSelection: boolean;
   clipboardFallback: boolean;
   clipboardFirstApps: string[];
   mascotPosition: { x: number; y: number } | null;
@@ -114,6 +115,14 @@ export default function Settings() {
         <label className="settings__switch">
           <input type="checkbox" checked={settings.paused} onChange={(e) => save({ paused: e.target.checked })} />
           <span>Paused (selections are ignored)</span>
+        </label>
+        <label className="settings__switch">
+          <input
+            type="checkbox"
+            checked={settings.flyToSelection}
+            onChange={(e) => save({ flyToSelection: e.target.checked })}
+          />
+          <span>Fly to the selection (the mascot flies next to the answer and back)</span>
         </label>
         <div className="settings__row">
           <button type="button" onClick={resetMascot}>

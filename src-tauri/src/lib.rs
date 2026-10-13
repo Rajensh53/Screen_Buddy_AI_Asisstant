@@ -72,6 +72,7 @@ pub fn run() {
             flow::popup_copy,
             flow::popup_open_settings,
             tray::show_mascot_menu,
+            crate::windows::mascot::mascot_grabbed,
             settings::get_settings,
             settings::save_settings,
             settings::default_block_list,
@@ -89,6 +90,7 @@ pub fn run() {
             app.manage(saved);
             app.state::<AppState>().paused.store(settings.paused, Ordering::SeqCst);
 
+            app.manage(crate::windows::flight::Flight::new(handle.clone()));
             crate::windows::mascot::setup(handle, settings.mascot_position)?;
             crate::windows::settings::setup(handle)?;
             // Before the tray and the selection worker, which both use it.

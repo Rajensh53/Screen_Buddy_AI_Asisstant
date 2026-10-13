@@ -1,25 +1,18 @@
-:root {
-  --card-bg: rgba(255, 255, 255, 0.97);
-  --card-text: #1f2937;
-  --card-border: rgba(0, 0, 0, 0.08);
-  --muted: #6b7280;
-  --error: #b45309;
-  --button-bg: rgba(0, 0, 0, 0.05);
-  --button-hover: rgba(0, 0, 0, 0.1);
-  --accent: #059669;
-}
+/* The popup: a dark "glass" card in the robot's colours (navy visor, cyan glow).
+   A real blur of the desktop would need Windows acrylic on the whole window, so the glass is a
+   translucent gradient. The card's size is measured by Popup.tsx: keep its margin (6px) and the
+   card -> content structure. */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --card-bg: rgba(32, 33, 36, 0.97);
-    --card-text: #e5e7eb;
-    --card-border: rgba(255, 255, 255, 0.1);
-    --muted: #9ca3af;
-    --error: #fbbf24;
-    --button-bg: rgba(255, 255, 255, 0.08);
-    --button-hover: rgba(255, 255, 255, 0.15);
-    --accent: #34d399;
-  }
+:root {
+  --card-from: rgba(15, 23, 42, 0.9);
+  --card-to: rgba(30, 41, 59, 0.88);
+  --card-border: rgba(56, 189, 248, 0.25);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #38bdf8;
+  --accent-soft: rgba(56, 189, 248, 0.14);
+  --error: #fbbf24;
+  --button-hover: rgba(148, 163, 184, 0.16);
 }
 
 .popup {
@@ -27,25 +20,30 @@
   /* The card fills the window. Rust sizes the window to the content, up to a maximum;
      beyond that the card scrolls inside. */
   height: calc(100vh - 12px);
-  padding: 8px 12px 12px 14px;
-  border-radius: 12px;
-  background: var(--card-bg);
-  color: var(--card-text);
+  padding: 9px 10px 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(160deg, var(--card-from), var(--card-to));
+  color: var(--text);
   border: 1px solid var(--card-border);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 4px 12px rgba(2, 6, 23, 0.45),
+    0 0 0 1px rgba(56, 189, 248, 0.05);
   overflow-y: auto;
-  font-size: 14px;
-  line-height: 1.5;
+  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
 }
 
+/* Fade and slide in, once per selection. */
 .popup__enter {
-  animation: popup-in 140ms ease-out;
+  animation: popup-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 @keyframes popup-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(6px) scale(0.98);
   }
   to {
     opacity: 1;
@@ -53,17 +51,11 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .popup__enter {
-    animation: none;
-  }
-}
-
-/* Title, then Copy and ×. */
+/* Title (the selected text), then Copy and Close. */
 .popup__header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   margin-bottom: 6px;
 }
 
@@ -81,7 +73,7 @@
 /* A notice's title is the message itself, so it reads like a heading. */
 .popup__title--notice {
   font-size: 14px;
-  color: var(--card-text);
+  color: var(--text);
   white-space: normal;
 }
 
@@ -93,30 +85,48 @@ button {
 
 .popup__icon-button {
   flex: none;
-  padding: 1px 8px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
   border: none;
-  border-radius: 6px;
-  background: var(--button-bg);
-  font-size: 12px;
-  line-height: 1.6;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 
 .popup__icon-button:hover {
   background: var(--button-hover);
+  color: var(--text);
 }
 
+.popup__icon-button--done,
+.popup__icon-button--done:hover {
+  color: var(--accent);
+}
+
+/* Retry and the notice's action: a cyan pill. */
 .popup__action {
-  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
   padding: 4px 12px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: none;
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
   color: var(--accent);
   font-size: 13px;
+  font-weight: 600;
+  transition: background 120ms ease;
 }
 
 .popup__action:hover {
-  background: var(--button-bg);
+  background: rgba(56, 189, 248, 0.24);
 }
 
 .popup__muted {
@@ -124,22 +134,70 @@ button {
   color: var(--muted);
 }
 
+/* "Thinking…" with three small pulsing dots. */
+.popup__thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.popup__dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.popup__dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: popup-dot 1s ease-in-out infinite;
+}
+
+.popup__dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.popup__dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes popup-dot {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* Answer lines: "Label: value". */
 .popup__line {
-  margin: 0 0 4px;
+  margin: 0 0 6px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .popup__label {
-  font-weight: 600;
   margin-right: 6px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .popup__label::after {
   content: ":";
 }
 
-/* Urdu: label on its own line, the text right-to-left with a font that joins the letters. */
+.popup__value {
+  color: var(--text);
+}
+
+/* Urdu: the label on its own line, the text right-to-left with a font that joins the letters. */
 .popup__line--rtl {
   display: flex;
   flex-direction: column;
@@ -147,9 +205,10 @@ button {
 
 .popup__line--rtl .popup__value {
   text-align: right;
-  font-family: "Segoe UI", "Noto Nastaliq Urdu", "Urdu Typesetting", sans-serif;
+  unicode-bidi: plaintext;
+  font-family: "Segoe UI", system-ui, "Noto Nastaliq Urdu", sans-serif;
   font-size: 16px;
-  line-height: 1.8;
+  line-height: 1.9;
 }
 
 .popup__error {
@@ -160,8 +219,8 @@ button {
 /* "Wrong text? Use the clipboard in {app}" under an answer. */
 .popup__footer {
   margin: 8px 0 0;
-  padding-top: 6px;
-  border-top: 1px solid var(--card-border);
+  padding-top: 7px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
   color: var(--muted);
   font-size: 12px;
 }
@@ -173,4 +232,12 @@ button {
   color: var(--accent);
   font-size: 12px;
   text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popup__enter,
+  .popup__dots span {
+    animation: none;
+  }
 }

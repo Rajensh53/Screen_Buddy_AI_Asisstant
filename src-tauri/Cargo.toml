@@ -31,6 +31,8 @@ log = "0.4"
 # Same version Tauri uses internally, so it is compiled only once.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    # DwmFlush: the mascot's flight waits for each screen refresh, so it moves without stutter.
+    "Win32_Graphics_Dwm",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     # Clipboard fallback for the PDF viewer (opt-in): clipboard, its memory, and the

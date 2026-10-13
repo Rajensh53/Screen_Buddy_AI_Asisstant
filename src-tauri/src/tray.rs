@@ -13,6 +13,8 @@ const PAUSE: &str = "pause";
 const QUIT: &str = "quit";
 #[cfg(debug_assertions)]
 const TEST_OLLAMA: &str = "test_ollama";
+#[cfg(debug_assertions)]
+const PREVIEW_MASCOT: &str = "preview_mascot";
 
 /// Event emitted to all windows with the new paused state (`bool`).
 pub const PAUSED_CHANGED: &str = "paused-changed";
@@ -27,6 +29,8 @@ pub fn setup(app: &AppHandle, paused: bool) -> tauri::Result<()> {
     {
         let ollama_item = MenuItem::with_id(app, TEST_OLLAMA, "Test Ollama", true, None::<&str>)?;
         menu.insert(&ollama_item, 2)?;
+        let preview_item = MenuItem::with_id(app, PREVIEW_MASCOT, "Preview mascot states", true, None::<&str>)?;
+        menu.insert(&preview_item, 3)?;
     }
 
     let mut builder = TrayIconBuilder::with_id("main").tooltip("Screen Buddy").menu(&menu);
@@ -66,6 +70,13 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         QUIT => app.exit(0),
         #[cfg(debug_assertions)]
         TEST_OLLAMA => debug::test_ollama(),
+        // The mascot shows each of its looks for 2 s (Mascot.tsx, debug builds only).
+        #[cfg(debug_assertions)]
+        PREVIEW_MASCOT => {
+            if let Err(err) = app.emit("mascot-preview", ()) {
+                log::warn!("could not emit mascot-preview: {err}");
+            }
+        }
         _ => {}
     }
 }

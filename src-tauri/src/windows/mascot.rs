@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent};
 
+use super::flight::{self, Flight};
+
 use crate::selection::{Point, Rect};
 use crate::settings::{Position, SettingsState};
 
@@ -48,6 +50,10 @@ pub fn bounds(app: &AppHandle) -> Option<Rect> {
 
 /// Puts the mascot back in the corner ("Reset mascot position" in the settings).
 pub fn move_to_corner(app: &AppHandle) -> tauri::Result<()> {
+    // The corner is the new home, also if it was away next to a popup.
+    if let Some(flight) = app.try_state::<Flight>() {
+        flight.cancel();
+    }
     match app.get_webview_window(super::MASCOT) {
         Some(window) => place_in_corner(&window),
         None => Ok(()),
@@ -66,8 +72,25 @@ fn place_in_corner(window: &WebviewWindow) -> tauri::Result<()> {
 }
 
 fn place(window: &WebviewWindow, pos: PhysicalPosition<i32>) -> tauri::Result<()> {
-    *PLACED_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(pos);
+    placed_at(pos);
     window.set_position(pos)
+}
+
+/// The app itself moved the mascot to `pos` (placing it, or the end of a flight): the window's
+/// `Moved` event for it is not a user move and must not change the saved home.
+pub fn placed_at(pos: PhysicalPosition<i32>) {
+    *PLACED_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some(pos);
+}
+
+/// The user pressed the mouse on the mascot (it may be about to drag it): any flight stops, and
+/// wherever it is dropped becomes the new home.
+#[tauri::command]
+pub fn mascot_grabbed(window: WebviewWindow, flight: tauri::State<'_, Flight>) -> Result<(), String> {
+    if window.label() != super::MASCOT {
+        return Err("not allowed from this window".to_owned());
+    }
+    flight.cancel();
+    Ok(())
 }
 
 /// Saves the mascot position after the user drags it. Dragging sends many `Moved` events, so a
@@ -92,7 +115,9 @@ fn save_when_moved(app: &AppHandle, window: &WebviewWindow) {
         return;
     }
     window.on_window_event(move |event| {
+        // Moves by a flight, or to where the app placed it, are not the user's.
         if let WindowEvent::Moved(pos) = event
+            && !flight::is_animating()
             && *PLACED_AT.lock().unwrap_or_else(|e| e.into_inner()) != Some(*pos)
         {
             let _ = tx.send(*pos);

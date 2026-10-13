@@ -22,6 +22,7 @@ use crate::provider::ProviderError;
 use crate::provider::ollama::OllamaProvider;
 use crate::selection::{Point, Rect, SelectionEvent, clipboard, prepare_text};
 use crate::settings::SettingsState;
+use crate::windows::flight::{self, Flight};
 use crate::windows::placement::{self, HeightLimits, Side, Size};
 use crate::windows::{self as app_windows, POPUP, mascot, popup};
 
@@ -162,6 +163,8 @@ impl Flow {
         }
         log::info!("[notice] {kind:?}");
         self.cancel_answer();
+        // Notices are shown with the mascot at home, where it reacts to them.
+        self.app.state::<Flight>().return_home();
         let id = self.next_id();
         self.open_popup(id, anchor);
         emit(&self.app, BuddyEvent::Notice { id, notice: notice::notice(kind, cx) });
@@ -178,6 +181,9 @@ impl Flow {
         let id = self.next_id();
         self.open_popup(id, PopupAnchor::Selection { rect: event.rect, pointer });
         let settings = self.app.state::<SettingsState>().get();
+        if settings.fly_to_selection {
+            self.fly_mascot_beside_popup();
+        }
         let offer = clipboard_offer(
             &event,
             settings.clipboard_fallback,
@@ -254,13 +260,24 @@ impl Flow {
         lock(&self.popup).is_some()
     }
 
-    /// Hides the popup and stops the running answer.
+    /// Hides the popup and stops the running answer. The mascot flies home if it was away.
     pub fn hide(&self) {
         self.cancel_answer();
+        self.app.state::<Flight>().return_home();
         let was_shown = lock(&self.popup).take().is_some();
         if was_shown {
             emit(&self.app, BuddyEvent::Hide);
             run_on_popup(&self.app, popup::hide);
+        }
+    }
+
+    /// Flies the mascot next to the popup just placed, if there is room beside it.
+    fn fly_mascot_beside_popup(&self) {
+        let Some(popup) = *lock(&self.popup) else { return };
+        let Some(mascot) = mascot::bounds(&self.app) else { return };
+        let size = Size { width: mascot.width(), height: mascot.height() };
+        if let Some(target) = flight::dock_position(popup.bounds, popup.side, size, popup.work_area) {
+            self.app.state::<Flight>().fly_to(target);
         }
     }
 
