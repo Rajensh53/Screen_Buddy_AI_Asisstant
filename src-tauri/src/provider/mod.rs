@@ -1,9 +1,6 @@
 //! Talks to the language model. The app only ever uses the local Ollama server (see `ollama.rs`);
 //! the `Provider` trait keeps the explainer independent of it and lets tests use a fake.
 
-// Until the explainer is wired to selections (Task 6), only the debug tray item uses this module.
-#![cfg_attr(not(debug_assertions), allow(dead_code, reason = "wired in Task 6"))]
-
 pub mod ollama;
 
 use std::fmt;

@@ -47,6 +47,46 @@
   border-radius: 0 0 12px 12px;
 }
 
+/* noticed: a quick hop with wide eyes */
+.mascot--noticed .mascot__body {
+  animation: hop 300ms ease-out;
+}
+
+.mascot--noticed .mascot__eye {
+  animation: none;
+  transform: scale(1.25);
+}
+
+/* thinking: eyes look up, slow wobble */
+.mascot--thinking .mascot__body {
+  animation: wobble 1.6s ease-in-out infinite;
+}
+
+.mascot--thinking .mascot__eyes {
+  transform: translateY(-5px);
+}
+
+/* talking: the mouth opens and closes */
+.mascot--talking .mascot__mouth {
+  animation: talk 240ms ease-in-out infinite alternate;
+}
+
+/* cant_read: flat eyes and a little grey, kept subtle */
+.mascot--cant_read .mascot__eye {
+  height: 3px;
+  border-radius: 2px;
+  animation: none;
+}
+
+.mascot--cant_read .mascot__body {
+  filter: grayscale(0.5);
+}
+
+.mascot__eyes,
+.mascot__eye {
+  transition: transform 150ms ease, height 150ms ease;
+}
+
 .mascot--paused {
   opacity: 0.45;
   filter: grayscale(0.8);
@@ -67,6 +107,35 @@
   }
 }
 
+@keyframes hop {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-10px) scale(1.04, 0.96);
+  }
+}
+
+@keyframes wobble {
+  0%,
+  100% {
+    transform: rotate(-3deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+}
+
+@keyframes talk {
+  from {
+    height: 4px;
+  }
+  to {
+    height: 12px;
+  }
+}
+
 @keyframes blink {
   0%,
   94%,
@@ -80,7 +149,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .mascot__body,
-  .mascot__eye {
+  .mascot__eye,
+  .mascot__mouth {
     animation: none !important;
   }
 }

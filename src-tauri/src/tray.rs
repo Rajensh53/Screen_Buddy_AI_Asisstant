@@ -5,13 +5,12 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 use crate::AppState;
+use crate::flow::Flow;
 use crate::windows::settings;
 
 const SETTINGS: &str = "settings";
 const PAUSE: &str = "pause";
 const QUIT: &str = "quit";
-#[cfg(debug_assertions)]
-const TEST_POPUP: &str = "test_popup";
 #[cfg(debug_assertions)]
 const TEST_OLLAMA: &str = "test_ollama";
 
@@ -28,11 +27,8 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
 
     #[cfg(debug_assertions)]
     {
-        let test_item =
-            MenuItem::with_id(app, TEST_POPUP, "Test popup (in 3 s)", true, None::<&str>)?;
-        menu.insert(&test_item, 2)?;
         let ollama_item = MenuItem::with_id(app, TEST_OLLAMA, "Test Ollama", true, None::<&str>)?;
-        menu.insert(&ollama_item, 3)?;
+        menu.insert(&ollama_item, 2)?;
     }
 
     let mut builder = TrayIconBuilder::with_id("main")
@@ -46,8 +42,6 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             }
             PAUSE => toggle_pause(app, &pause_item),
             QUIT => app.exit(0),
-            #[cfg(debug_assertions)]
-            TEST_POPUP => debug::test_popup(app),
             #[cfg(debug_assertions)]
             TEST_OLLAMA => debug::test_ollama(),
             _ => {}
@@ -64,6 +58,9 @@ fn toggle_pause(app: &AppHandle, item: &MenuItem<Wry>) {
     // fetch_xor flips the flag and returns the old value.
     let paused = !state.paused.fetch_xor(true, Ordering::SeqCst);
 
+    if paused {
+        app.state::<Flow>().hide();
+    }
     if let Err(err) = item.set_text(if paused { "Resume" } else { "Pause" }) {
         eprintln!("could not update tray label: {err}");
     }
@@ -72,20 +69,16 @@ fn toggle_pause(app: &AppHandle, item: &MenuItem<Wry>) {
     }
 }
 
-/// Manual checks until the real flow exists (Task 6).
+/// Manual check of the Ollama connection and the prompt, without selecting anything.
 #[cfg(debug_assertions)]
 mod debug {
     use std::io::Write;
     use std::sync::OnceLock;
-    use std::thread;
-    use std::time::{Duration, Instant};
-
-    use tauri::{AppHandle, Manager, PhysicalPosition};
+    use std::time::Instant;
 
     use crate::explainer::{Explained, Explainer};
     use crate::provider::DEFAULT_MODEL;
     use crate::provider::ollama::OllamaProvider;
-    use crate::windows::{POPUP, popup};
 
     /// Kept for the whole run, so a second click shows a cached answer.
     /// `$env:SCREEN_BUDDY_TEST_MODEL = "no-such-model"` tests the "model missing" message.
@@ -139,37 +132,5 @@ mod debug {
                 Err(err) => println!("[ollama] {err}"),
             }
         });
-    }
-
-    /// After 3 s, shows the popup next to the cursor without activating it; hides it 5 s later.
-    pub fn test_popup(app: &AppHandle) {
-        let app = app.clone();
-        thread::spawn(move || {
-            thread::sleep(Duration::from_secs(3));
-            run_on_popup(&app, |window| {
-                let cursor = window.cursor_position()?;
-                let pos = PhysicalPosition::new(cursor.x as i32 + 16, cursor.y as i32 + 16);
-                popup::show_at(window, pos)
-            });
-            thread::sleep(Duration::from_secs(5));
-            run_on_popup(&app, popup::hide);
-        });
-    }
-
-    fn run_on_popup(
-        app: &AppHandle,
-        f: impl FnOnce(&tauri::WebviewWindow) -> popup::Result<()> + Send + 'static,
-    ) {
-        let handle = app.clone();
-        let result = app.run_on_main_thread(move || {
-            if let Some(window) = handle.get_webview_window(POPUP)
-                && let Err(err) = f(&window)
-            {
-                eprintln!("test popup failed: {err}");
-            }
-        });
-        if let Err(err) = result {
-            eprintln!("test popup failed: {err}");
-        }
     }
 }

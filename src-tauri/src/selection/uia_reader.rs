@@ -39,7 +39,6 @@ const MAX_TEXT_UNITS: i32 = (MAX_CHARS * 2) as i32;
 const MAX_ANCESTORS: usize = 32;
 /// Wait before the single retry when the selection was still empty.
 const RETRY_DELAY: Duration = Duration::from_millis(150);
-
 /// How the selection was found. Logged in debug builds to learn which fallbacks real apps need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -57,7 +56,9 @@ pub enum ReadOutcome {
     /// The user is in a text area (edit box or document) that doesn't expose the Text
     /// pattern, so this app can't be read.
     NoTextPattern { process_id: u32 },
-    /// Nothing selected, or the gesture wasn't in a text area (title bar, tab, button, ...).
+    /// The app has readable text here but reports nothing selected.
+    EmptySelection { process_id: u32 },
+    /// The gesture wasn't in a text area (title bar, tab, button, ...).
     NoSelection,
     /// Nothing has keyboard focus and nothing is under the mouse, or both are unreachable
     /// (for example an app running as administrator).
@@ -70,7 +71,7 @@ enum Probe {
     Selection { text: String, process_id: u32, rect: Option<Rect>, via_parent: bool },
     Password { process_id: u32 },
     /// A Text pattern exists but nothing is selected.
-    Empty,
+    Empty { process_id: u32 },
     /// No Text pattern on the element or its ancestors. `text_like`: the element is an
     /// edit box or document, so the user probably expected it to be readable.
     NoPattern { process_id: u32, text_like: bool },
@@ -129,8 +130,13 @@ fn try_once(probe: &impl SelectionProbe, pt: Point) -> Attempt {
         _ => {}
     }
 
-    if focused == Probe::Empty || at_point == Probe::Empty {
-        return Attempt::Retry(ReadOutcome::NoSelection);
+    // The text under the mouse matters most, so its process is reported first.
+    let empty = [&at_point, &focused].into_iter().find_map(|p| match p {
+        Probe::Empty { process_id } => Some(*process_id),
+        _ => None,
+    });
+    if let Some(process_id) = empty {
+        return Attempt::Retry(ReadOutcome::EmptySelection { process_id });
     }
     let text_like = [&focused, &at_point].into_iter().find_map(|p| match p {
         Probe::NoPattern { process_id, text_like: true } => Some(*process_id),
@@ -208,7 +214,7 @@ impl UiaReader {
                     let process_id = current.CurrentProcessId().map_or(process_id, |p| p as u32);
                     return match read_selection(&pattern) {
                         Ok(Some((text, rect))) => Probe::Selection { text, process_id, rect, via_parent: depth > 0 },
-                        Ok(None) => Probe::Empty,
+                        Ok(None) => Probe::Empty { process_id },
                         Err(_) => Probe::Unavailable,
                     };
                 }
@@ -368,6 +374,10 @@ mod tests {
         Probe::Selection { text: text.into(), process_id: 7, rect: None, via_parent }
     }
 
+    fn empty(process_id: u32) -> Probe {
+        Probe::Empty { process_id }
+    }
+
     fn outcome(text: &str, source: Source) -> ReadOutcome {
         ReadOutcome::Selection { text: text.into(), process_id: 7, rect: None, source }
     }
@@ -400,7 +410,7 @@ mod tests {
 
     #[test]
     fn point_selection_is_used_when_focus_has_none() {
-        let fake = Fake::new(vec![Probe::Empty], vec![selection("in iframe", false)]);
+        let fake = Fake::new(vec![empty(9)], vec![selection("in iframe", false)]);
         assert_eq!(run(&fake), (outcome("in iframe", Source::Point), false));
     }
 
@@ -415,15 +425,23 @@ mod tests {
 
     #[test]
     fn empty_selection_is_retried_once() {
-        let fake = Fake::new(vec![Probe::Empty, Probe::Empty], vec![Probe::Empty, selection("late", false)]);
+        let fake = Fake::new(vec![empty(9), empty(9)], vec![empty(9), selection("late", false)]);
         assert_eq!(run(&fake), (outcome("late", Source::Retry), true));
     }
 
     #[test]
-    fn still_empty_after_retry_is_no_selection() {
-        let fake = Fake::new(vec![Probe::Empty, Probe::Empty], vec![Probe::Empty, Probe::Empty]);
-        assert_eq!(run(&fake), (ReadOutcome::NoSelection, true));
+    fn still_empty_after_retry_is_empty_selection() {
+        let fake = Fake::new(vec![empty(9), empty(9)], vec![empty(9), empty(9)]);
+        assert_eq!(run(&fake), (ReadOutcome::EmptySelection { process_id: 9 }, true));
         assert_eq!(fake.point_calls.get(), 2);
+    }
+
+    #[test]
+    fn empty_selection_reports_the_process_under_the_mouse() {
+        let fake = Fake::new(vec![empty(1), empty(1)], vec![empty(2), empty(2)]);
+        assert_eq!(run(&fake).0, ReadOutcome::EmptySelection { process_id: 2 });
+        let fake = Fake::new(vec![empty(1), empty(1)], vec![Probe::Unavailable, Probe::Unavailable]);
+        assert_eq!(run(&fake).0, ReadOutcome::EmptySelection { process_id: 1 });
     }
 
     #[test]
@@ -449,7 +467,7 @@ mod tests {
     fn text_area_readable_on_retry_gives_selection() {
         // WebView2 apps (new Outlook) expose the Text pattern only after the first request.
         let fake = Fake::new(
-            vec![Probe::NoPattern { process_id: 5, text_like: true }, Probe::Empty],
+            vec![Probe::NoPattern { process_id: 5, text_like: true }, empty(9)],
             vec![Probe::Unavailable, selection("Security info was added", false)],
         );
         assert_eq!(run(&fake), (outcome("Security info was added", Source::Retry), true));

@@ -1,16 +1,52 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { BUDDY_EVENT, type BuddyEvent } from "../shared/events";
 
-/** Character states. Only `idle` is used until the selection flow is wired (Task 6). */
+/** Character states, driven by `buddy` events from the selection flow. */
 export type MascotState = "idle" | "noticed" | "thinking" | "talking" | "cant_read";
 
+const NOTICED_MS = 300;
+const DONE_IDLE_MS = 2000;
+const CANT_READ_MS = 1500;
+
 export default function Mascot() {
-  const [state] = useState<MascotState>("idle");
+  const [state, setState] = useState<MascotState>("idle");
   const [paused, setPaused] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     const unlisten = listen<boolean>("paused-changed", (event) => setPaused(event.payload));
     return () => {
+      unlisten.then((stop) => stop());
+    };
+  }, []);
+
+  useEffect(() => {
+    /** Switches to `now`, then to `next` after `ms`. */
+    const show = (now: MascotState, next?: MascotState, ms = 0) => {
+      window.clearTimeout(timer.current);
+      setState(now);
+      if (next) timer.current = window.setTimeout(() => setState(next), ms);
+    };
+
+    const unlisten = listen<BuddyEvent>(BUDDY_EVENT, ({ payload }) => {
+      switch (payload.kind) {
+        case "start":
+          return show("noticed", "thinking", NOTICED_MS);
+        case "chunk":
+          return show("talking");
+        case "done":
+          return show("talking", "idle", DONE_IDLE_MS);
+        case "error":
+        case "cant_read":
+          // Kept short and subtle: some apps simply don't expose their text.
+          return show("cant_read", "idle", CANT_READ_MS);
+        case "hide":
+          return show("idle");
+      }
+    });
+    return () => {
+      window.clearTimeout(timer.current);
       unlisten.then((stop) => stop());
     };
   }, []);

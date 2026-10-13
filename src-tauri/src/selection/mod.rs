@@ -1,8 +1,8 @@
 //! Detects text selections in other apps and reads them with UI Automation.
 //!
 //! Flow: mouse hook thread -> channel -> selection worker thread
-//! (trigger rules -> wait `READ_DELAY` -> UIA reader -> `SelectionEvent`).
-//! For now events are only logged to the console; the explainer is wired in Task 6.
+//! (trigger rules -> wait `READ_DELAY` -> UIA reader -> privacy gate -> `SelectionEvent`)
+//! -> `Flow`, which shows the popup and streams the explanation.
 
 mod mouse_hook;
 mod process_info;
@@ -19,7 +19,9 @@ use ::windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXDOUBLECLK
 use tauri::{AppHandle, Manager};
 
 use crate::AppState;
+use crate::flow::Flow;
 use crate::privacy::{AppIdentity, BlockList, Decision, PrivacyGate, SkipReason};
+pub use trigger::Point;
 use trigger::{DoubleClickSettings, Gesture, GestureDetector, MouseInput, RepeatFilter};
 use uia_reader::{ReadOutcome, Source, UiaReader};
 
@@ -43,6 +45,23 @@ impl Rect {
             right: self.right.max(other.right),
             bottom: self.bottom.max(other.bottom),
         }
+    }
+
+    pub fn width(self) -> i32 {
+        self.right - self.left
+    }
+
+    pub fn height(self) -> i32 {
+        self.bottom - self.top
+    }
+
+    /// Left and top edges are inside, right and bottom edges are outside (as in Win32 RECT).
+    pub fn contains(self, pt: Point) -> bool {
+        pt.x >= self.left && pt.x < self.right && pt.y >= self.top && pt.y < self.bottom
+    }
+
+    pub fn intersects(self, other: Rect) -> bool {
+        self.left < other.right && other.left < self.right && self.top < other.bottom && other.top < self.bottom
     }
 }
 
@@ -80,11 +99,16 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
             return;
         }
     };
+    let flow = app.state::<Flow>();
     let gate = PrivacyGate::new(std::process::id(), block_list());
     let mut detector = GestureDetector::new(double_click_settings());
     let mut repeats = RepeatFilter::default();
 
     for input in rx {
+        // Any press outside the popup hides it, before it can start a new selection.
+        if let MouseInput::LeftDown { pt, .. } = input {
+            flow.on_mouse_down(pt);
+        }
         let Some(gesture) = detector.feed(input) else { continue };
 
         if app.state::<AppState>().paused.load(Ordering::SeqCst) {
@@ -120,38 +144,62 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
             gate.check_element(AppIdentity { process_id, process_name: &name }, is_password)
         };
 
-        match reader.read(at) {
+        let (text, process_id, rect, source) = match reader.read(at) {
             ReadOutcome::Selection { text, process_id, rect, source } => {
                 if let Decision::Skip(reason) = check_element(process_id, false) {
                     log_skip(&reason);
                     continue;
                 }
-                if !trigger::gesture_near_selection(gesture, rect) {
-                    continue;
-                }
-                let Some(text) = trigger::prepare_text(&text) else { continue };
-                if !repeats.accept(&text, Instant::now()) {
-                    continue;
-                }
-                let info = app_of(process_id);
-                let event =
-                    SelectionEvent { text, app_name: info.app_name, process_name: info.process_name, rect };
-                log_event(&event, source);
+                (text, process_id, rect, source)
+            }
+            ReadOutcome::EmptySelection { .. } => {
+                debug_skip("the app reports nothing selected");
+                continue;
             }
             ReadOutcome::Password { process_id } => {
                 // The reader stopped before reading any text; the gate records why.
                 if let Decision::Skip(reason) = check_element(process_id, true) {
                     log_skip(&reason);
                 }
+                continue;
             }
             ReadOutcome::NoTextPattern { process_id } => {
                 let info = app_of(process_id);
                 println!("[selection] can't read this app: {} ({})", info.app_name, info.process_name);
+                flow.on_cant_read();
+                continue;
             }
-            ReadOutcome::NoSelection | ReadOutcome::NoFocus => {}
+            ReadOutcome::NoSelection => {
+                debug_skip("no text area under the mouse");
+                continue;
+            }
+            ReadOutcome::NoFocus => {
+                debug_skip("nothing readable under the mouse");
+                continue;
+            }
+        };
+
+        if !trigger::gesture_near_selection(gesture, rect) {
+            debug_skip("the gesture was not on the selected text");
+            continue;
         }
+        let Some(text) = trigger::prepare_text(&text) else {
+            debug_skip("selection too short");
+            continue;
+        };
+        // The same text again is only ignored while its popup is still open. After the popup
+        // was closed, selecting the same word again should show it again (from the cache).
+        if !repeats.accept(&text, Instant::now()) && flow.popup_visible() {
+            debug_skip("same text, popup still open");
+            continue;
+        }
+        let info = app_of(process_id);
+        let event = SelectionEvent { text, app_name: info.app_name, process_name: info.process_name, rect };
+        log_event(&event, source);
+        flow.on_selection(event, at);
     }
 }
+
 
 /// The block list. Defaults until settings exist (Task 7).
 fn block_list() -> BlockList {
@@ -172,6 +220,14 @@ fn log_skip(reason: &SkipReason) {
         SkipReason::OwnWindow => {}
         SkipReason::PasswordField => println!("[privacy] skipped: password field"),
         SkipReason::BlockedApp(name) => println!("[privacy] skipped: blocked app {name}"),
+    }
+}
+
+/// Debug builds only: why a gesture did not show a popup, to diagnose "nothing happened".
+/// Never logs any text.
+fn debug_skip(why: &str) {
+    if cfg!(debug_assertions) {
+        println!("[selection] skipped: {why}");
     }
 }
 

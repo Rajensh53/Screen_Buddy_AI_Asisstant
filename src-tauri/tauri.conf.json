@@ -18,6 +18,7 @@
         "width": 140,
         "height": 140,
         "visible": false,
+        "focusable": false,
         "decorations": false,
         "transparent": true,
         "shadow": false,

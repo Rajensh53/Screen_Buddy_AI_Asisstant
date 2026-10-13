@@ -1,11 +1,10 @@
 //! Turns a selection into an explanation: cleans the text, builds the prompt, and asks the
 //! provider, remembering complete answers so the same text is not asked twice.
 
-// Until the explainer is wired to selections (Task 6), only the debug tray item uses this module.
-#![cfg_attr(not(debug_assertions), allow(dead_code, reason = "wired in Task 6"))]
-
 mod cache;
 mod prompt;
+
+pub use prompt::clean_input;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -64,7 +63,8 @@ impl<P: Provider> Explainer<P> {
         }
 
         let mut answer = String::new();
-        let request = prompt::build_request(&self.model, &key.1);
+        let user = prompt::user_message(&key.1);
+        let request = prompt::build_request(&self.model, &user);
         self.provider
             .stream_chat(request, |piece| {
                 answer.push_str(piece);
@@ -187,7 +187,7 @@ mod tests {
     fn text_is_cleaned_before_asking_and_caching() {
         let explainer = Explainer::new(FakeProvider::answering(&["answer"]), "m");
         assert_eq!(explain(&explainer, "\u{FFFC}word\r\n").0, Ok(Explained::Fresh));
-        assert_eq!(*explainer.provider.last_user_text.lock().unwrap(), "word");
+        assert_eq!(*explainer.provider.last_user_text.lock().unwrap(), "<selected_text>\nword\n</selected_text>");
         assert_eq!(explain(&explainer, "word").0, Ok(Explained::Cached));
         assert_eq!(calls(&explainer), 1);
     }

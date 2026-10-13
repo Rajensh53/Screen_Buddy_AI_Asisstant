@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "popup",
-  "description": "Popup window: listen to app events (streamed answers arrive in Task 6).",
+  "description": "Popup window: listen to streamed answers. It also calls the app command popup_resize, which app commands allow without a permission entry.",
   "windows": ["popup"],
   "permissions": ["core:event:default"]
 }

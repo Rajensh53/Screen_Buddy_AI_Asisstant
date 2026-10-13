@@ -8,38 +8,40 @@
 //!   Tauri's `show()` calls `ShowWindow(SW_SHOW)`, which activates the window.
 //!
 //! Tauri never learns that the popup is visible, so its `hide()` would do nothing.
-//! All popup visibility therefore goes through this module (`show_at` / `hide`).
-//! Also avoid other Tauri style setters on the popup (always-on-top, decorations,
-//! resizable, ...) while it is visible: those re-apply Tauri's "hidden" state.
+//! All popup visibility and sizing therefore goes through this module.
+//! Also avoid Tauri setters on the popup (size, position, always-on-top, ...) while it is
+//! visible: those re-apply Tauri's "hidden" state.
 
-// Until the popup is wired to selections (Task 6), only the debug tray item uses this module.
-#![cfg_attr(not(debug_assertions), allow(dead_code))]
-
-use tauri::{PhysicalPosition, WebviewWindow};
 use ::windows::Win32::UI::WindowsAndMessaging::{
-    HWND_TOPMOST, SW_HIDE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
+    HWND_TOPMOST, SET_WINDOW_POS_FLAGS, SW_HIDE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos,
+    ShowWindow,
 };
+use tauri::WebviewWindow;
+
+use crate::selection::Rect;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Moves the popup's top-left corner to `pos` (physical pixels), puts it on top of other
-/// topmost windows and shows it, all without activating it.
+/// Moves and sizes the popup to `rect` (physical pixels), puts it on top of other topmost
+/// windows and shows it, all without activating it.
 ///
 /// SetWindowPos with SWP_NOACTIVATE | SWP_SHOWWINDOW:
 /// https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos
-pub fn show_at(window: &WebviewWindow, pos: PhysicalPosition<i32>) -> Result<()> {
+pub fn show_at(window: &WebviewWindow, rect: Rect) -> Result<()> {
+    set_window_pos(window, rect, SWP_NOACTIVATE | SWP_SHOWWINDOW)
+}
+
+/// Moves and sizes the visible popup without activating it or changing its z-order.
+pub fn set_bounds(window: &WebviewWindow, rect: Rect) -> Result<()> {
+    set_window_pos(window, rect, SWP_NOACTIVATE | SWP_NOZORDER)
+}
+
+fn set_window_pos(window: &WebviewWindow, rect: Rect, flags: SET_WINDOW_POS_FLAGS) -> Result<()> {
     let hwnd = window.hwnd()?;
     // SAFETY: `hwnd` is the live top-level window owned by this Tauri webview window.
+    // HWND_TOPMOST is ignored when SWP_NOZORDER is set.
     unsafe {
-        SetWindowPos(
-            hwnd,
-            Some(HWND_TOPMOST),
-            pos.x,
-            pos.y,
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOSIZE | SWP_SHOWWINDOW,
-        )?;
+        SetWindowPos(hwnd, Some(HWND_TOPMOST), rect.left, rect.top, rect.width(), rect.height(), flags)?;
     }
     Ok(())
 }
