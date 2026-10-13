@@ -26,7 +26,7 @@ use crate::flow::{Flow, PopupAnchor};
 use crate::notice::{Context, NoticeKind};
 use crate::privacy::{AppIdentity, BlockList, Decision, PrivacyGate, SkipReason};
 use crate::settings::SettingsState;
-pub use trigger::Point;
+pub use trigger::{Point, prepare_text};
 use trigger::{DoubleClickSettings, Gesture, GestureDetector, MouseInput, RepeatFilter};
 use uia_reader::{ReadOutcome, Source, UiaReader};
 
@@ -78,6 +78,10 @@ pub struct SelectionEvent {
     pub process_name: String,
     /// Where the selected text is on screen, if the app reports it.
     pub rect: Option<Rect>,
+    /// The process of the top-level window the selection was made in, for copying it again.
+    pub window_pid: Option<u32>,
+    /// Read through the clipboard rather than UI Automation.
+    pub via_clipboard: bool,
 }
 
 /// Installs the mouse hook and starts the selection worker.
@@ -211,7 +215,11 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
                 if !element_allowed(process_id) {
                     continue;
                 }
-                match pdf_viewer.then(|| copy_selection(true)) {
+                // The Edge/Chrome PDF viewer, and apps the user listed as "clipboard first" because
+                // their UI Automation text was wrong: their own Copy first, UI Automation if it fails.
+                let app_exe = window_pid.and_then(process_info::process_name).unwrap_or_default();
+                let copy_first = pdf_viewer || settings.reads_clipboard_first(&app_exe);
+                match copy_first.then(|| copy_selection(true)) {
                     Some(Copied::Text(copied)) => (copied, process_id, None, Source::Clipboard),
                     _ => (text, process_id, rect, source),
                 }
@@ -279,7 +287,14 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
             continue;
         }
         let info = app_of(process_id);
-        let event = SelectionEvent { text, app_name: info.app_name, process_name: info.process_name, rect };
+        let event = SelectionEvent {
+            text,
+            app_name: info.app_name,
+            process_name: info.process_name,
+            rect,
+            window_pid,
+            via_clipboard: source == Source::Clipboard,
+        };
         log_event(&event, source);
         flow.on_selection(event, at);
     }

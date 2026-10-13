@@ -84,6 +84,11 @@ export default function Popup() {
 
   const close = () => invoke("popup_close").catch(() => {});
   const retry = () => invoke("popup_retry").catch(() => {});
+  // Hides the link at once; the re-read answer arrives as a new selection.
+  const useClipboard = () => {
+    setView((current) => (current ? { ...current, clipboardOffer: undefined } : current));
+    invoke("popup_use_clipboard").catch(() => {});
+  };
   const runAction = (action: NoticeAction) =>
     invoke(action === "retry" ? "popup_retry" : "popup_open_settings").catch(() => {});
   const copy = () => {
@@ -143,6 +148,15 @@ export default function Popup() {
                   Retry
                 </button>
               </div>
+            )}
+
+            {view.status === "done" && view.clipboardOffer && (
+              <p className="popup__footer">
+                Wrong text?{" "}
+                <button type="button" className="popup__link" onClick={useClipboard}>
+                  Use the clipboard in {view.clipboardOffer}
+                </button>
+              </p>
             )}
 
             {view.status === "notice" && view.notice && (

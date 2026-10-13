@@ -68,6 +68,7 @@ pub fn run() {
             flow::popup_resize,
             flow::popup_close,
             flow::popup_retry,
+            flow::popup_use_clipboard,
             flow::popup_copy,
             flow::popup_open_settings,
             tray::show_mascot_menu,

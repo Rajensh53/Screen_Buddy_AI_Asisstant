@@ -46,6 +46,10 @@ pub struct Settings {
     /// viewer), copy it with Ctrl+C and restore the clipboard (see `selection::clipboard`). On by
     /// default; the user can turn it off.
     pub clipboard_fallback: bool,
+    /// Apps (exe names) whose UI Automation text can be wrong: their selection is copied first,
+    /// and UI Automation only used if that fails. Needs `clipboard_fallback`. The Edge/Chrome PDF
+    /// viewer is handled automatically and needn't be listed.
+    pub clipboard_first_apps: Vec<String>,
     /// Where the mascot was left. `None`: the bottom-right corner.
     pub mascot_position: Option<Position>,
 }
@@ -58,6 +62,7 @@ impl Default for Settings {
             paused: false,
             history_enabled: false,
             clipboard_fallback: true,
+            clipboard_first_apps: Vec::new(),
             mascot_position: None,
         }
     }
@@ -65,12 +70,19 @@ impl Default for Settings {
 
 impl Settings {
     /// Trims the model name (empty: the default model, at most `MAX_MODEL_CHARS` characters)
-    /// and normalizes the block list like `BlockList` does (lowercase `.exe` names, sorted, unique).
+    /// and normalizes both app lists like `BlockList` does (lowercase `.exe` names, sorted, unique).
     pub fn normalized(mut self) -> Self {
         let model = self.model.trim();
         self.model = if model.is_empty() { DEFAULT_MODEL.to_owned() } else { model.chars().take(MAX_MODEL_CHARS).collect() };
         self.block_list = BlockList::new(&self.block_list).entries();
+        self.clipboard_first_apps = BlockList::new(&self.clipboard_first_apps).entries();
         self
+    }
+
+    /// Whether the selection in `process_name` (exe, any case) is copied before UI Automation is
+    /// asked. Only with the clipboard fallback on: that switch controls all clipboard use.
+    pub fn reads_clipboard_first(&self, process_name: &str) -> bool {
+        self.clipboard_fallback && BlockList::new(&self.clipboard_first_apps).contains(process_name)
     }
 }
 
@@ -259,6 +271,22 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_first_list_is_normalized() {
+        let apps = vec!["Antigravity IDE".into(), " antigravity ide.exe".into(), "OLK.EXE".into()];
+        let s = Settings { clipboard_first_apps: apps, ..Settings::default() }.normalized();
+        assert_eq!(s.clipboard_first_apps, ["antigravity ide.exe", "olk.exe"]);
+    }
+
+    #[test]
+    fn clipboard_first_matches_listed_apps_only_with_the_fallback_on() {
+        let s = Settings { clipboard_first_apps: vec!["olk.exe".into()], ..Settings::default() };
+        assert!(s.reads_clipboard_first("OLK.exe"));
+        assert!(!s.reads_clipboard_first("notepad.exe"));
+        let off = Settings { clipboard_fallback: false, ..s };
+        assert!(!off.reads_clipboard_first("olk.exe"));
+    }
+
+    #[test]
     fn saved_file_with_missing_and_unknown_fields_loads() {
         let saved = json!({ "model": "llama3.2:1b", "paused": true, "someOldField": 3 });
         let s: Settings = serde_json::from_value(saved).unwrap();
@@ -272,7 +300,15 @@ mod tests {
     fn json_uses_the_names_the_frontend_expects() {
         let s = Settings { mascot_position: Some(Position { x: -10, y: 20 }), ..Settings::default() };
         let value = serde_json::to_value(&s).unwrap();
-        for key in ["model", "blockList", "paused", "historyEnabled", "clipboardFallback", "mascotPosition"] {
+        for key in [
+            "model",
+            "blockList",
+            "paused",
+            "historyEnabled",
+            "clipboardFallback",
+            "clipboardFirstApps",
+            "mascotPosition",
+        ] {
             assert!(value.get(key).is_some(), "missing {key}");
         }
         assert_eq!(value["mascotPosition"], json!({ "x": -10, "y": 20 }));

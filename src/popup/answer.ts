@@ -10,13 +10,21 @@ export interface AnswerView {
   status: Status;
   error?: string;
   notice?: Notice;
+  /** The app to offer "Use the clipboard in {app}" for, while that hasn't been clicked. */
+  clipboardOffer?: string;
 }
 
 /** Applies one event. Events for an older selection (stale `id`) are ignored. */
 export function reduce(view: AnswerView | null, event: BuddyEvent): AnswerView | null {
   switch (event.kind) {
     case "start":
-      return { id: event.id, title: event.title, text: "", status: "thinking" };
+      return {
+        id: event.id,
+        title: event.title,
+        text: "",
+        status: "thinking",
+        clipboardOffer: event.clipboard_offer ?? undefined,
+      };
     case "notice":
       return { id: event.id, title: event.notice.title, text: "", status: "notice", notice: event.notice };
     case "chunk":

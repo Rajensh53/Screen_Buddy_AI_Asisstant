@@ -50,6 +50,15 @@ body {
   background: var(--card);
 }
 
+.settings__section h3 {
+  margin: 14px 0 4px;
+  font-size: 14px;
+}
+
+.settings__applist--disabled {
+  opacity: 0.5;
+}
+
 .settings__section h2 {
   margin: 0 0 6px;
   font-size: 15px;
@@ -92,7 +101,8 @@ button:hover:not(:disabled) {
   border-color: var(--accent);
 }
 
-button:disabled {
+button:disabled,
+.settings__input:disabled {
   opacity: 0.5;
   cursor: default;
 }

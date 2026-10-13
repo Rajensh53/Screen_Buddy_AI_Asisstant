@@ -13,7 +13,8 @@ export interface Notice {
 }
 
 export type BuddyEvent =
-  | { kind: "start"; id: number; title: string }
+  /** `clipboard_offer`: the app's name if the popup offers "Wrong text? Use the clipboard in {app}". */
+  | { kind: "start"; id: number; title: string; clipboard_offer: string | null }
   | { kind: "chunk"; id: number; text: string }
   | { kind: "done"; id: number; cached: boolean }
   | { kind: "error"; id: number; message: string }

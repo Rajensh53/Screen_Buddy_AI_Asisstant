@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import AppList from "./AppList";
 
 /** Mirrors `Settings` in src-tauri/src/settings.rs (tested there against these names). */
 interface SettingsData {
@@ -10,6 +11,7 @@ interface SettingsData {
   paused: boolean;
   historyEnabled: boolean;
   clipboardFallback: boolean;
+  clipboardFirstApps: string[];
   mascotPosition: { x: number; y: number } | null;
 }
 
@@ -28,7 +30,6 @@ export default function Settings() {
   const [modelDraft, setModelDraft] = useState("");
   const [models, setModels] = useState<string[]>([]);
   const [check, setCheck] = useState<Check>({ kind: "idle" });
-  const [newApp, setNewApp] = useState("");
   const [clipboard, setClipboard] = useState<ClipboardStatus>({ cloudSync: false, history: false });
   const [error, setError] = useState("");
   const [version, setVersion] = useState("");
@@ -93,13 +94,6 @@ export default function Settings() {
       .catch((e) => setCheck({ kind: "error", message: errorText(e) }));
   };
 
-  const addApp = () => {
-    const app = newApp.trim();
-    if (!app) return;
-    save({ blockList: [...settings.blockList, app] });
-    setNewApp("");
-  };
-
   const restoreDefaults = () => {
     invoke<string[]>("default_block_list")
       .then((blockList) => save({ blockList }))
@@ -161,33 +155,11 @@ export default function Settings() {
       <section className="settings__section">
         <h2>Privacy</h2>
         <p className="settings__muted">Text in these apps is never read.</p>
-        <ul className="settings__chips">
-          {settings.blockList.map((app) => (
-            <li key={app} className="settings__chip">
-              <span>{app}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${app}`}
-                onClick={() => save({ blockList: settings.blockList.filter((a) => a !== app) })}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="settings__row">
-          <input
-            className="settings__input"
-            placeholder="App to block, e.g. notepad.exe"
-            value={newApp}
-            spellCheck={false}
-            onChange={(e) => setNewApp(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addApp()}
-          />
-          <button type="button" onClick={addApp} disabled={!newApp.trim()}>
-            Add
-          </button>
-        </div>
+        <AppList
+          apps={settings.blockList}
+          placeholder="App to block, e.g. notepad.exe"
+          onChange={(blockList) => save({ blockList })}
+        />
         <div className="settings__row">
           <button type="button" className="settings__link" onClick={restoreDefaults}>
             Restore defaults
@@ -230,6 +202,18 @@ export default function Settings() {
         {!clipboard.cloudSync && clipboard.history && settings.clipboardFallback && (
           <p className="settings__warning">Copied text will also appear in your clipboard history (Win+V).</p>
         )}
+
+        <h3>Always use the clipboard in these apps</h3>
+        <p className="settings__muted">
+          For apps that show the wrong words. Their own Copy is used first. You can also add an app from the popup:
+          "Wrong text? Use the clipboard in …". PDFs in Edge and Chrome are handled automatically.
+        </p>
+        <AppList
+          apps={settings.clipboardFirstApps}
+          placeholder="App, e.g. olk.exe"
+          disabled={!settings.clipboardFallback || clipboard.cloudSync}
+          onChange={(clipboardFirstApps) => save({ clipboardFirstApps })}
+        />
       </section>
 
       {version && <p className="settings__muted settings__version">Version {version}</p>}

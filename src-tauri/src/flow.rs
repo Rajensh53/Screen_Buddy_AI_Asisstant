@@ -20,7 +20,8 @@ use crate::explainer::{self, Explained, Explainer};
 use crate::notice::{self, Context, Notice, NoticeKind, NoticeThrottle};
 use crate::provider::ProviderError;
 use crate::provider::ollama::OllamaProvider;
-use crate::selection::{Point, Rect, SelectionEvent, clipboard};
+use crate::selection::{Point, Rect, SelectionEvent, clipboard, prepare_text};
+use crate::settings::SettingsState;
 use crate::windows::placement::{self, HeightLimits, Side, Size};
 use crate::windows::{self as app_windows, POPUP, mascot, popup};
 
@@ -47,7 +48,9 @@ const STARTUP_NOTICE_DELAY: Duration = Duration::from_secs(3);
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BuddyEvent {
-    Start { id: u64, title: String },
+    /// `clipboard_offer`: the app's name if the popup should offer "Wrong text? Use the clipboard
+    /// in {app}" (see `clipboard_offer`).
+    Start { id: u64, title: String, clipboard_offer: Option<String> },
     Chunk { id: u64, text: String },
     Done { id: u64, cached: bool },
     Error { id: u64, message: String },
@@ -174,7 +177,14 @@ impl Flow {
         *lock(&self.last_selection) = Some((event.clone(), pointer));
         let id = self.next_id();
         self.open_popup(id, PopupAnchor::Selection { rect: event.rect, pointer });
-        emit(&self.app, BuddyEvent::Start { id, title: title_for(&event.text) });
+        let settings = self.app.state::<SettingsState>().get();
+        let offer = clipboard_offer(
+            &event,
+            settings.clipboard_fallback,
+            clipboard::policy().cloud_sync,
+            settings.reads_clipboard_first(&event.process_name),
+        );
+        emit(&self.app, BuddyEvent::Start { id, title: title_for(&event.text), clipboard_offer: offer });
 
         let app = self.app.clone();
         let explainer = Arc::clone(&self.explainer);
@@ -193,6 +203,34 @@ impl Flow {
             emit(&app, end);
         });
         *lock(&self.current) = Some(task);
+    }
+
+    /// The popup's "Use the clipboard in {app}" link: puts the app on the clipboard-first list,
+    /// then reads the same selection again through the clipboard and explains it. The source app
+    /// is still in front and its selection still highlighted: the popup never takes focus.
+    /// Runs on its own thread, as the copy can take a few hundred milliseconds.
+    pub fn use_clipboard_for_last_app(&self) {
+        let Some((event, pointer)) = lock(&self.last_selection).clone() else { return };
+        let app = self.app.clone();
+        let _ = thread::Builder::new().name("clipboard-first".into()).spawn(move || {
+            let flow = app.state::<Flow>();
+            let exe = event.process_name.clone();
+            app.state::<SettingsState>().update(&app, |s| s.clipboard_first_apps.push(exe.clone()));
+            log::info!("[selection] {exe} now reads through the clipboard first");
+
+            let copied = match event.window_pid {
+                Some(pid) => clipboard::copy_selection(pid, clipboard::copy_keys(&exe)),
+                None => Err("the app's window wasn't found"),
+            };
+            let text = copied.and_then(|text| prepare_text(&text).ok_or("it copied no text"));
+            match text {
+                Ok(text) => flow.on_selection(SelectionEvent { text, via_clipboard: true, ..event }, pointer),
+                Err(why) => {
+                    let cx = Context { app: Some(&event.app_name), reason: Some(why), ..Context::default() };
+                    flow.notify(NoticeKind::NothingSelected, cx, PopupAnchor::Selection { rect: event.rect, pointer });
+                }
+            }
+        });
     }
 
     /// Asks again for the last selection (the popup's Retry button).
@@ -354,6 +392,14 @@ pub fn popup_close(window: WebviewWindow, flow: State<'_, Flow>) -> Result<(), S
     Ok(())
 }
 
+/// The popup's "Wrong text? Use the clipboard in {app}" link.
+#[tauri::command]
+pub fn popup_use_clipboard(window: WebviewWindow, flow: State<'_, Flow>) -> Result<(), String> {
+    only_popup(&window)?;
+    flow.use_clipboard_for_last_app();
+    Ok(())
+}
+
 /// The popup's Retry button, after an error.
 #[tauri::command]
 pub fn popup_retry(window: WebviewWindow, flow: State<'_, Flow>) -> Result<(), String> {
@@ -376,6 +422,14 @@ pub fn popup_open_settings(window: WebviewWindow, app: AppHandle, flow: State<'_
     only_popup(&window)?;
     flow.hide();
     app_windows::settings::open(&app).map_err(|e| e.to_string())
+}
+
+/// Whether the popup offers "Wrong text? Use the clipboard in {app}": only for text read through
+/// UI Automation, with the clipboard fallback on and usable (no cloud sync), in an app that
+/// isn't on the clipboard-first list yet. Returns the app's name for the link.
+fn clipboard_offer(event: &SelectionEvent, fallback_on: bool, cloud_sync: bool, already_listed: bool) -> Option<String> {
+    let offer = !event.via_clipboard && fallback_on && !cloud_sync && !already_listed && event.window_pid.is_some();
+    offer.then(|| event.app_name.clone())
 }
 
 /// The selection as a one-line title: whitespace collapsed, cut on a character boundary.
@@ -422,7 +476,14 @@ mod tests {
     #[test]
     fn events_have_the_shape_the_frontend_expects() {
         let cases = [
-            (BuddyEvent::Start { id: 1, title: "word".into() }, json!({"kind": "start", "id": 1, "title": "word"})),
+            (
+                BuddyEvent::Start { id: 1, title: "word".into(), clipboard_offer: None },
+                json!({"kind": "start", "id": 1, "title": "word", "clipboard_offer": null}),
+            ),
+            (
+                BuddyEvent::Start { id: 1, title: "word".into(), clipboard_offer: Some("Notepad".into()) },
+                json!({"kind": "start", "id": 1, "title": "word", "clipboard_offer": "Notepad"}),
+            ),
             (BuddyEvent::Chunk { id: 1, text: "Hi".into() }, json!({"kind": "chunk", "id": 1, "text": "Hi"})),
             (BuddyEvent::Done { id: 1, cached: true }, json!({"kind": "done", "id": 1, "cached": true})),
             (BuddyEvent::Error { id: 2, message: "m".into() }, json!({"kind": "error", "id": 2, "message": "m"})),
@@ -450,6 +511,35 @@ mod tests {
         assert_eq!(ollama_notice(&ProviderError::NotRunning), Some(NoticeKind::OllamaNotRunning));
         assert_eq!(ollama_notice(&ProviderError::ModelMissing("m".into())), Some(NoticeKind::ModelMissing));
         assert_eq!(ollama_notice(&ProviderError::Timeout), None);
+    }
+
+    fn event(via_clipboard: bool) -> SelectionEvent {
+        SelectionEvent {
+            text: "word".into(),
+            app_name: "Notepad".into(),
+            process_name: "notepad.exe".into(),
+            rect: None,
+            window_pid: Some(4),
+            via_clipboard,
+        }
+    }
+
+    #[test]
+    fn clipboard_is_offered_for_uia_text_when_it_can_be_used() {
+        assert_eq!(clipboard_offer(&event(false), true, false, false), Some("Notepad".into()));
+    }
+
+    #[test]
+    fn clipboard_is_not_offered_otherwise() {
+        // Already read through the clipboard.
+        assert_eq!(clipboard_offer(&event(true), true, false, false), None);
+        // Fallback off, cloud sync on, or the app already listed.
+        assert_eq!(clipboard_offer(&event(false), false, false, false), None);
+        assert_eq!(clipboard_offer(&event(false), true, true, false), None);
+        assert_eq!(clipboard_offer(&event(false), true, false, true), None);
+        // No window to copy from.
+        let no_window = SelectionEvent { window_pid: None, ..event(false) };
+        assert_eq!(clipboard_offer(&no_window, true, false, false), None);
     }
 
     #[test]
