@@ -25,12 +25,21 @@ pub fn lookup(process_id: u32) -> ProcessInfo {
         let unknown = format!("pid {process_id}");
         return ProcessInfo { process_name: unknown.clone(), app_name: unknown };
     };
-    let file = std::path::Path::new(&path);
-    let process_name = file.file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
+    let process_name = file_name(&path);
     let app_name = file_description(&path)
-        .or_else(|| file.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .or_else(|| std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()))
         .unwrap_or_else(|| process_name.clone());
     ProcessInfo { process_name, app_name }
+}
+
+/// Exe file name only, for example `chrome.exe`. Cheaper than `lookup` (no version-info read),
+/// so it is used for the privacy check before every read.
+pub fn process_name(process_id: u32) -> Option<String> {
+    image_path(process_id).map(|path| file_name(&path))
+}
+
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned())
 }
 
 /// Process id of the top-level window under `pt` (physical screen coordinates).

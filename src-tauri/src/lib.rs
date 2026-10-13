@@ -1,3 +1,5 @@
+mod privacy;
+mod provider;
 mod selection;
 mod tray;
 mod windows;

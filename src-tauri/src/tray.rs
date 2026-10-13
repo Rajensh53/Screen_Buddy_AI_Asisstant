@@ -12,6 +12,8 @@ const PAUSE: &str = "pause";
 const QUIT: &str = "quit";
 #[cfg(debug_assertions)]
 const TEST_POPUP: &str = "test_popup";
+#[cfg(debug_assertions)]
+const TEST_OLLAMA: &str = "test_ollama";
 
 /// Event emitted to all windows with the new paused state (`bool`).
 pub const PAUSED_CHANGED: &str = "paused-changed";
@@ -29,6 +31,8 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         let test_item =
             MenuItem::with_id(app, TEST_POPUP, "Test popup (in 3 s)", true, None::<&str>)?;
         menu.insert(&test_item, 2)?;
+        let ollama_item = MenuItem::with_id(app, TEST_OLLAMA, "Test Ollama", true, None::<&str>)?;
+        menu.insert(&ollama_item, 3)?;
     }
 
     let mut builder = TrayIconBuilder::with_id("main")
@@ -44,6 +48,8 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             QUIT => app.exit(0),
             #[cfg(debug_assertions)]
             TEST_POPUP => debug::test_popup(app),
+            #[cfg(debug_assertions)]
+            TEST_OLLAMA => debug::test_ollama(),
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
@@ -66,15 +72,59 @@ fn toggle_pause(app: &AppHandle, item: &MenuItem<Wry>) {
     }
 }
 
-/// Manual check for the "popup never takes focus" rule, until the real flow exists (Task 6).
+/// Manual checks until the real flow exists (Task 6).
 #[cfg(debug_assertions)]
 mod debug {
+    use std::io::Write;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use tauri::{AppHandle, Manager, PhysicalPosition};
 
+    use crate::provider::ollama::OllamaProvider;
+    use crate::provider::{ChatRequest, DEFAULT_MODEL, Provider};
     use crate::windows::{POPUP, popup};
+
+    /// Checks Ollama, then streams the answer for a fixed word to the console.
+    /// Never sends any selected text.
+    /// `$env:SCREEN_BUDDY_TEST_MODEL = "no-such-model"` tests the "model missing" message.
+    pub fn test_ollama() {
+        tauri::async_runtime::spawn(async {
+            let model = std::env::var("SCREEN_BUDDY_TEST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
+            let provider = match OllamaProvider::new() {
+                Ok(p) => p,
+                Err(err) => return eprintln!("[ollama] could not create client: {err}"),
+            };
+            if let Err(err) = provider.health(&model).await {
+                return println!("[ollama] {err}");
+            }
+            println!("[ollama] ok: {model} is installed. Asking about \"serendipity\"...");
+
+            let req = ChatRequest {
+                model: &model,
+                system: "Explain the word in one short line of simple English.",
+                user: "serendipity",
+            };
+            let start = Instant::now();
+            let mut first_piece = None;
+            let result = provider
+                .stream_chat(req, |piece| {
+                    first_piece.get_or_insert_with(|| start.elapsed());
+                    print!("{piece}");
+                    let _ = std::io::stdout().flush();
+                })
+                .await;
+            println!();
+            match result {
+                Ok(()) => println!(
+                    "[ollama] first piece after {:.1?}, done after {:.1?}",
+                    first_piece.unwrap_or_default(),
+                    start.elapsed()
+                ),
+                Err(err) => println!("[ollama] {err}"),
+            }
+        });
+    }
 
     /// After 3 s, shows the popup next to the cursor without activating it; hides it 5 s later.
     pub fn test_popup(app: &AppHandle) {

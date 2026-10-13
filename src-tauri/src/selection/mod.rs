@@ -19,6 +19,7 @@ use ::windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXDOUBLECLK
 use tauri::{AppHandle, Manager};
 
 use crate::AppState;
+use crate::privacy::{AppIdentity, BlockList, Decision, PrivacyGate, SkipReason};
 use trigger::{DoubleClickSettings, Gesture, GestureDetector, MouseInput, RepeatFilter};
 use uia_reader::{ReadOutcome, Source, UiaReader};
 
@@ -79,7 +80,7 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
             return;
         }
     };
-    let own_pid = std::process::id();
+    let gate = PrivacyGate::new(std::process::id(), block_list());
     let mut detector = GestureDetector::new(double_click_settings());
     let mut repeats = RepeatFilter::default();
 
@@ -89,28 +90,43 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
         if app.state::<AppState>().paused.load(Ordering::SeqCst) {
             continue;
         }
-        // Dragging the mascot or selecting inside our own windows is not a selection to explain.
         let points = match gesture {
             Gesture::Drag { down, up } => [down, up],
             Gesture::DoubleClick { pt } => [pt, pt],
         };
-        if points.iter().any(|pt| process_info::process_at(*pt) == Some(own_pid)) {
+        // Where the gesture ended: the selection should be under the mouse there.
+        let at = points[1];
+
+        // Privacy check before any UI Automation call: our own windows and blocked apps are never read.
+        let owners: Vec<(u32, String)> = points
+            .iter()
+            .filter_map(|pt| process_info::process_at(*pt))
+            .map(|pid| (pid, process_info::process_name(pid).unwrap_or_default()))
+            .collect();
+        let apps: Vec<AppIdentity> =
+            owners.iter().map(|(pid, name)| AppIdentity { process_id: *pid, process_name: name }).collect();
+        if let Decision::Skip(reason) = gate.check_apps(&apps) {
+            log_skip(&reason);
             continue;
         }
 
-        // Where the gesture ended: the selection should be under the mouse there.
-        let at = match gesture {
-            Gesture::Drag { up, .. } => up,
-            Gesture::DoubleClick { pt } => pt,
-        };
-
         thread::sleep(READ_DELAY);
         // Apps like the new Outlook show content through a helper process (msedgewebview2.exe).
-        // Name the app after the window under the mouse (olk.exe), so the block list sees the real app.
+        // Name the app after the window under the mouse (olk.exe), so logs and settings show the real app.
         let app_of = |element_pid: u32| process_info::lookup(process_info::process_at(at).unwrap_or(element_pid));
+        // The process that owns the text, as the privacy gate sees it.
+        let check_element = |process_id: u32, is_password: bool| {
+            let name = process_info::process_name(process_id).unwrap_or_default();
+            gate.check_element(AppIdentity { process_id, process_name: &name }, is_password)
+        };
+
         match reader.read(at) {
             ReadOutcome::Selection { text, process_id, rect, source } => {
-                if process_id == own_pid || !trigger::gesture_near_selection(gesture, rect) {
+                if let Decision::Skip(reason) = check_element(process_id, false) {
+                    log_skip(&reason);
+                    continue;
+                }
+                if !trigger::gesture_near_selection(gesture, rect) {
                     continue;
                 }
                 let Some(text) = trigger::prepare_text(&text) else { continue };
@@ -123,7 +139,10 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
                 log_event(&event, source);
             }
             ReadOutcome::Password { process_id } => {
-                println!("[selection] skipped: password field in {}", app_of(process_id).process_name);
+                // The reader stopped before reading any text; the gate records why.
+                if let Decision::Skip(reason) = check_element(process_id, true) {
+                    log_skip(&reason);
+                }
             }
             ReadOutcome::NoTextPattern { process_id } => {
                 let info = app_of(process_id);
@@ -131,6 +150,28 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
             }
             ReadOutcome::NoSelection | ReadOutcome::NoFocus => {}
         }
+    }
+}
+
+/// The block list. Defaults until settings exist (Task 7).
+fn block_list() -> BlockList {
+    #[allow(unused_mut)]
+    let mut list = BlockList::defaults();
+    // Debug builds only: extra entries for manual testing, for example
+    // `$env:SCREEN_BUDDY_EXTRA_BLOCK = "notepad.exe"` before `npm run tauri dev`.
+    #[cfg(debug_assertions)]
+    if let Ok(extra) = std::env::var("SCREEN_BUDDY_EXTRA_BLOCK") {
+        list.extend(extra.split(','));
+    }
+    list
+}
+
+/// Logs why a selection was skipped. Never logs any text.
+fn log_skip(reason: &SkipReason) {
+    match reason {
+        SkipReason::OwnWindow => {}
+        SkipReason::PasswordField => println!("[privacy] skipped: password field"),
+        SkipReason::BlockedApp(name) => println!("[privacy] skipped: blocked app {name}"),
     }
 }
 

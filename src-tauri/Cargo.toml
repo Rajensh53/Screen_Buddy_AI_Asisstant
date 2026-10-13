@@ -17,6 +17,10 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+# HTTP client for the local Ollama API only. No TLS: we only ever talk to http://127.0.0.1:11434.
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Same version Tauri uses internally, so it is compiled only once.
 windows = { version = "0.62", features = [
     "Win32_Foundation",

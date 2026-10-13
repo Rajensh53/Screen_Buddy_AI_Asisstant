@@ -12,6 +12,9 @@
 //! Also avoid other Tauri style setters on the popup (always-on-top, decorations,
 //! resizable, ...) while it is visible: those re-apply Tauri's "hidden" state.
 
+// Until the popup is wired to selections (Task 6), only the debug tray item uses this module.
+#![cfg_attr(not(debug_assertions), allow(dead_code))]
+
 use tauri::{PhysicalPosition, WebviewWindow};
 use ::windows::Win32::UI::WindowsAndMessaging::{
     HWND_TOPMOST, SW_HIDE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
