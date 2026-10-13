@@ -76,39 +76,52 @@ fn toggle_pause(app: &AppHandle, item: &MenuItem<Wry>) {
 #[cfg(debug_assertions)]
 mod debug {
     use std::io::Write;
+    use std::sync::OnceLock;
     use std::thread;
     use std::time::{Duration, Instant};
 
     use tauri::{AppHandle, Manager, PhysicalPosition};
 
+    use crate::explainer::{Explained, Explainer};
+    use crate::provider::DEFAULT_MODEL;
     use crate::provider::ollama::OllamaProvider;
-    use crate::provider::{ChatRequest, DEFAULT_MODEL, Provider};
     use crate::windows::{POPUP, popup};
 
-    /// Checks Ollama, then streams the answer for a fixed word to the console.
-    /// Never sends any selected text.
+    /// Kept for the whole run, so a second click shows a cached answer.
     /// `$env:SCREEN_BUDDY_TEST_MODEL = "no-such-model"` tests the "model missing" message.
+    fn explainer() -> Option<&'static Explainer<OllamaProvider>> {
+        static EXPLAINER: OnceLock<Option<Explainer<OllamaProvider>>> = OnceLock::new();
+        EXPLAINER
+            .get_or_init(|| match OllamaProvider::new() {
+                Ok(provider) => {
+                    let model =
+                        std::env::var("SCREEN_BUDDY_TEST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
+                    Some(Explainer::new(provider, model))
+                }
+                Err(err) => {
+                    eprintln!("[ollama] could not create client: {err}");
+                    None
+                }
+            })
+            .as_ref()
+    }
+
+    /// Checks Ollama, then explains a fixed test text with the real prompt and streams the
+    /// answer to the console. Never sends any selected text.
+    /// `$env:SCREEN_BUDDY_TEST_TEXT = "..."` sets another test text.
     pub fn test_ollama() {
         tauri::async_runtime::spawn(async {
-            let model = std::env::var("SCREEN_BUDDY_TEST_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_owned());
-            let provider = match OllamaProvider::new() {
-                Ok(p) => p,
-                Err(err) => return eprintln!("[ollama] could not create client: {err}"),
-            };
-            if let Err(err) = provider.health(&model).await {
+            let Some(explainer) = explainer() else { return };
+            if let Err(err) = explainer.health().await {
                 return println!("[ollama] {err}");
             }
-            println!("[ollama] ok: {model} is installed. Asking about \"serendipity\"...");
+            let text = std::env::var("SCREEN_BUDDY_TEST_TEXT").unwrap_or_else(|_| "serendipity".to_owned());
+            println!("[ollama] ok. Explaining {text:?}...");
 
-            let req = ChatRequest {
-                model: &model,
-                system: "Explain the word in one short line of simple English.",
-                user: "serendipity",
-            };
             let start = Instant::now();
             let mut first_piece = None;
-            let result = provider
-                .stream_chat(req, |piece| {
+            let result = explainer
+                .explain(&text, |piece| {
                     first_piece.get_or_insert_with(|| start.elapsed());
                     print!("{piece}");
                     let _ = std::io::stdout().flush();
@@ -116,11 +129,13 @@ mod debug {
                 .await;
             println!();
             match result {
-                Ok(()) => println!(
+                Ok(Explained::Fresh) => println!(
                     "[ollama] first piece after {:.1?}, done after {:.1?}",
                     first_piece.unwrap_or_default(),
                     start.elapsed()
                 ),
+                Ok(Explained::Cached) => println!("[ollama] (from cache) in {:.1?}", start.elapsed()),
+                Ok(Explained::NothingToExplain) => println!("[ollama] nothing to explain"),
                 Err(err) => println!("[ollama] {err}"),
             }
         });
