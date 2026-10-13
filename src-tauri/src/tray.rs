@@ -1,12 +1,12 @@
-use std::sync::atomic::Ordering;
+//! The tray icon and the mascot's right-click menu. Both menus use the same item ids, and all
+//! clicks go to `handle_menu_event` (registered once with `app.on_menu_event`).
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, Wry};
 
-use crate::AppState;
-use crate::flow::Flow;
-use crate::windows::settings;
+use crate::settings::SettingsState;
+use crate::windows::{MASCOT, settings};
 
 const SETTINGS: &str = "settings";
 const PAUSE: &str = "pause";
@@ -17,35 +17,19 @@ const TEST_OLLAMA: &str = "test_ollama";
 /// Event emitted to all windows with the new paused state (`bool`).
 pub const PAUSED_CHANGED: &str = "paused-changed";
 
-pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    let settings_item = MenuItem::with_id(app, SETTINGS, "Settings", true, None::<&str>)?;
-    let pause_item = MenuItem::with_id(app, PAUSE, "Pause", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
+/// The tray's Pause/Resume item, kept so its label follows the setting.
+struct PauseItem(MenuItem<Wry>);
 
-    let menu = Menu::with_items(app, &[&settings_item, &pause_item, &separator, &quit_item])?;
-
+/// `paused`: the saved setting, so the label is right from the start.
+pub fn setup(app: &AppHandle, paused: bool) -> tauri::Result<()> {
+    let menu = build_menu(app, paused)?;
     #[cfg(debug_assertions)]
     {
         let ollama_item = MenuItem::with_id(app, TEST_OLLAMA, "Test Ollama", true, None::<&str>)?;
         menu.insert(&ollama_item, 2)?;
     }
 
-    let mut builder = TrayIconBuilder::with_id("main")
-        .tooltip("Screen Buddy")
-        .menu(&menu)
-        .on_menu_event(move |app, event| match event.id().as_ref() {
-            SETTINGS => {
-                if let Err(err) = settings::open(app) {
-                    eprintln!("could not open settings: {err}");
-                }
-            }
-            PAUSE => toggle_pause(app, &pause_item),
-            QUIT => app.exit(0),
-            #[cfg(debug_assertions)]
-            TEST_OLLAMA => debug::test_ollama(),
-            _ => {}
-        });
+    let mut builder = TrayIconBuilder::with_id("main").tooltip("Screen Buddy").menu(&menu);
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
@@ -53,22 +37,64 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn toggle_pause(app: &AppHandle, item: &MenuItem<Wry>) {
-    let state = app.state::<AppState>();
-    // fetch_xor flips the flag and returns the old value.
-    let paused = !state.paused.fetch_xor(true, Ordering::SeqCst);
+/// Settings, Pause/Resume, a separator and Quit. The Pause item of the first menu (the tray's)
+/// is kept so its label can follow the setting.
+fn build_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<Wry>> {
+    let settings_item = MenuItem::with_id(app, SETTINGS, "Settings", true, None::<&str>)?;
+    let pause_item = MenuItem::with_id(app, PAUSE, pause_label(paused), true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&settings_item, &pause_item, &separator, &quit_item])?;
+    if app.try_state::<PauseItem>().is_none() {
+        app.manage(PauseItem(pause_item));
+    }
+    Ok(menu)
+}
 
-    if paused {
-        app.state::<Flow>().hide();
-    }
-    if let Err(err) = item.set_text(if paused { "Resume" } else { "Pause" }) {
-        eprintln!("could not update tray label: {err}");
-    }
-    if let Err(err) = app.emit(PAUSED_CHANGED, paused) {
-        eprintln!("could not emit {PAUSED_CHANGED}: {err}");
+/// Every menu click, from the tray or the mascot's menu.
+pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
+    match event.id().as_ref() {
+        SETTINGS => {
+            if let Err(err) = settings::open(app) {
+                log::warn!("could not open settings: {err}");
+            }
+        }
+        // Saved like any other setting; `show_paused` then updates the label and the windows.
+        PAUSE => {
+            app.state::<SettingsState>().update(app, |s| s.paused = !s.paused);
+        }
+        QUIT => app.exit(0),
+        #[cfg(debug_assertions)]
+        TEST_OLLAMA => debug::test_ollama(),
+        _ => {}
     }
 }
 
+/// Right-click on the mascot: the same menu as the tray, next to the mouse.
+#[tauri::command]
+pub fn show_mascot_menu(window: WebviewWindow, app: AppHandle, settings: State<'_, SettingsState>) -> Result<(), String> {
+    if window.label() != MASCOT {
+        return Err("not allowed from this window".to_owned());
+    }
+    let menu = build_menu(&app, settings.get().paused).map_err(|e| e.to_string())?;
+    window.popup_menu(&menu).map_err(|e| e.to_string())
+}
+
+/// Shows the new paused state in the tray label and tells the windows (the mascot dims).
+pub fn show_paused(app: &AppHandle, paused: bool) {
+    if let Some(item) = app.try_state::<PauseItem>()
+        && let Err(err) = item.0.set_text(pause_label(paused))
+    {
+        log::warn!("could not update tray label: {err}");
+    }
+    if let Err(err) = app.emit(PAUSED_CHANGED, paused) {
+        log::warn!("could not emit {PAUSED_CHANGED}: {err}");
+    }
+}
+
+fn pause_label(paused: bool) -> &'static str {
+    if paused { "Resume" } else { "Pause" }
+}
 /// Manual check of the Ollama connection and the prompt, without selecting anything.
 #[cfg(debug_assertions)]
 mod debug {
@@ -92,7 +118,7 @@ mod debug {
                     Some(Explainer::new(provider, model))
                 }
                 Err(err) => {
-                    eprintln!("[ollama] could not create client: {err}");
+                    log::warn!("[ollama] could not create client: {err}");
                     None
                 }
             })

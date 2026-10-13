@@ -3,7 +3,10 @@
 //! Flow: mouse hook thread -> channel -> selection worker thread
 //! (trigger rules -> wait `READ_DELAY` -> UIA reader -> privacy gate -> `SelectionEvent`)
 //! -> `Flow`, which shows the popup and streams the explanation.
+//! When UI Automation can't give the selection (or gives the shifted text of the Edge/Chrome PDF
+//! viewer), the clipboard fallback copies it instead (see `clipboard`).
 
+pub mod clipboard;
 mod mouse_hook;
 mod process_info;
 mod trigger;
@@ -19,8 +22,10 @@ use ::windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXDOUBLECLK
 use tauri::{AppHandle, Manager};
 
 use crate::AppState;
-use crate::flow::Flow;
+use crate::flow::{Flow, PopupAnchor};
+use crate::notice::{Context, NoticeKind};
 use crate::privacy::{AppIdentity, BlockList, Decision, PrivacyGate, SkipReason};
+use crate::settings::SettingsState;
 pub use trigger::Point;
 use trigger::{DoubleClickSettings, Gesture, GestureDetector, MouseInput, RepeatFilter};
 use uia_reader::{ReadOutcome, Source, UiaReader};
@@ -92,15 +97,16 @@ pub fn stop() {
 }
 
 fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
+    let flow = app.state::<Flow>();
     let reader = match UiaReader::new() {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[selection] UI Automation unavailable, selection reading is off: {e}");
+            flow.notify_startup(NoticeKind::UiaUnavailable, format!("UI Automation is unavailable: {e}"));
             return;
         }
     };
-    let flow = app.state::<Flow>();
-    let gate = PrivacyGate::new(std::process::id(), block_list());
+    let settings_state = app.state::<SettingsState>();
+    let own_pid = std::process::id();
     let mut detector = GestureDetector::new(double_click_settings());
     let mut repeats = RepeatFilter::default();
 
@@ -114,12 +120,31 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
         if app.state::<AppState>().paused.load(Ordering::SeqCst) {
             continue;
         }
+        // Read on every gesture, so changes in the settings window apply at once.
+        let settings = settings_state.get();
+        let gate = PrivacyGate::new(own_pid, block_list(&settings.block_list));
         let points = match gesture {
             Gesture::Drag { down, up } => [down, up],
             Gesture::DoubleClick { pt } => [pt, pt],
         };
         // Where the gesture ended: the selection should be under the mouse there.
         let at = points[1];
+        // Moving or resizing a window (title bar, border, scroll bar, ...) is not a selection.
+        // Checked first, so it never shows a notice either.
+        if points.iter().any(|pt| process_info::on_window_frame(*pt)) {
+            log::debug!("[selection] skipped: gesture on a window frame");
+            continue;
+        }
+        // Notices about this gesture go next to the mouse.
+        let notify = |kind: NoticeKind, app_name: &str, reason: Option<&str>| {
+            let cx = Context { app: Some(app_name), reason, ..Context::default() };
+            flow.notify(kind, cx, PopupAnchor::Selection { rect: None, pointer: at });
+        };
+        let report_skip = |reason: &SkipReason| match reason {
+            SkipReason::OwnWindow => {}
+            SkipReason::PasswordField => notify(NoticeKind::PasswordField, "", None),
+            SkipReason::BlockedApp(name) => notify(NoticeKind::BlockedApp, name, None),
+        };
 
         // Privacy check before any UI Automation call: our own windows and blocked apps are never read.
         let owners: Vec<(u32, String)> = points
@@ -130,7 +155,7 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
         let apps: Vec<AppIdentity> =
             owners.iter().map(|(pid, name)| AppIdentity { process_id: *pid, process_name: name }).collect();
         if let Decision::Skip(reason) = gate.check_apps(&apps) {
-            log_skip(&reason);
+            report_skip(&reason);
             continue;
         }
 
@@ -139,58 +164,118 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
         // Name the app after the window under the mouse (olk.exe), so logs and settings show the real app.
         let app_of = |element_pid: u32| process_info::lookup(process_info::process_at(at).unwrap_or(element_pid));
         // The process that owns the text, as the privacy gate sees it.
-        let check_element = |process_id: u32, is_password: bool| {
+        let element_allowed = |process_id: u32| {
             let name = process_info::process_name(process_id).unwrap_or_default();
-            gate.check_element(AppIdentity { process_id, process_name: &name }, is_password)
+            match gate.check_element(AppIdentity { process_id, process_name: &name }, false) {
+                Decision::Allow => true,
+                Decision::Skip(reason) => {
+                    report_skip(&reason);
+                    false
+                }
+            }
+        };
+        // UI Automation first. When it can't give the selection, or gives the shifted text of the
+        // Edge/Chrome PDF viewer, the clipboard fallback copies it (see `clipboard` for the rules).
+        // Clipboard text has no trustworthy rectangle, so its popup goes next to the mouse.
+        // `in_text_area`: UI Automation found text here, so a blocked copy is worth a notice.
+        let window_pid = process_info::process_at(at);
+        let copy_selection = |in_text_area: bool| -> Copied {
+            let Some(window_pid) = window_pid else { return Copied::Failed("the app's window wasn't found") };
+            if !settings.clipboard_fallback {
+                return Copied::Failed("the clipboard fallback is turned off in Settings");
+            }
+            // Both ends of a drag: a scroll bar dragged and released over the text doesn't count.
+            if !points.iter().all(|pt| reader.may_hold_selection_at(*pt)) {
+                return Copied::Failed("the mouse was on a button, menu or image, not on text");
+            }
+            if let Err(clipboard::Blocked::CloudSync) = clipboard::may_copy(true, clipboard::policy()) {
+                if !in_text_area {
+                    return Copied::Failed("clipboard sync is on");
+                }
+                notify(NoticeKind::ClipboardSync, &app_of(window_pid).app_name, None);
+                return Copied::Noticed;
+            }
+            // Terminals get their own copy keys: Ctrl+C would stop the running program there.
+            let keys = clipboard::copy_keys(&process_info::process_name(window_pid).unwrap_or_default());
+            match clipboard::copy_selection(window_pid, keys) {
+                Ok(text) => Copied::Text(text),
+                Err(why) => {
+                    log::debug!("[selection] clipboard fallback: {why}");
+                    Copied::Failed(why)
+                }
+            }
         };
 
         let (text, process_id, rect, source) = match reader.read(at) {
-            ReadOutcome::Selection { text, process_id, rect, source } => {
-                if let Decision::Skip(reason) = check_element(process_id, false) {
-                    log_skip(&reason);
+            ReadOutcome::Selection { text, process_id, rect, source, pdf_viewer } => {
+                if !element_allowed(process_id) {
                     continue;
                 }
-                (text, process_id, rect, source)
-            }
-            ReadOutcome::EmptySelection { .. } => {
-                debug_skip("the app reports nothing selected");
-                continue;
-            }
-            ReadOutcome::Password { process_id } => {
-                // The reader stopped before reading any text; the gate records why.
-                if let Decision::Skip(reason) = check_element(process_id, true) {
-                    log_skip(&reason);
+                match pdf_viewer.then(|| copy_selection(true)) {
+                    Some(Copied::Text(copied)) => (copied, process_id, None, Source::Clipboard),
+                    _ => (text, process_id, rect, source),
                 }
+            }
+            ReadOutcome::EmptySelection { process_id, .. } => {
+                if !element_allowed(process_id) {
+                    continue;
+                }
+                match copy_selection(true) {
+                    Copied::Text(copied) => (copied, process_id, None, Source::Clipboard),
+                    Copied::Noticed => continue,
+                    Copied::Failed(why) => {
+                        let info = app_of(process_id);
+                        log::info!("[selection] {} ({}) reports nothing selected; {why}", info.app_name, info.process_name);
+                        notify(NoticeKind::NothingSelected, &info.app_name, Some(why));
+                        continue;
+                    }
+                }
+            }
+            ReadOutcome::Password { .. } => {
+                // The reader stopped before reading any text. Never copied either.
+                notify(NoticeKind::PasswordField, "", None);
                 continue;
             }
             ReadOutcome::NoTextPattern { process_id } => {
-                let info = app_of(process_id);
-                println!("[selection] can't read this app: {} ({})", info.app_name, info.process_name);
-                flow.on_cant_read();
-                continue;
+                if !element_allowed(process_id) {
+                    continue;
+                }
+                match copy_selection(true) {
+                    Copied::Text(copied) => (copied, process_id, None, Source::Clipboard),
+                    Copied::Noticed => continue,
+                    Copied::Failed(why) => {
+                        let info = app_of(process_id);
+                        log::info!("[selection] can't read {} ({}); {why}", info.app_name, info.process_name);
+                        notify(NoticeKind::CantRead, &info.app_name, Some(why));
+                        continue;
+                    }
+                }
             }
-            ReadOutcome::NoSelection => {
-                debug_skip("no text area under the mouse");
-                continue;
-            }
-            ReadOutcome::NoFocus => {
-                debug_skip("nothing readable under the mouse");
-                continue;
+            ReadOutcome::NoSelection | ReadOutcome::NoFocus => {
+                // UI Automation sees no text here. Many apps (custom-drawn, Java, some Qt) still
+                // copy their selection. The apps under the gesture already passed the gate.
+                // Silent when nothing comes of it: these are mostly clicks and drags on things
+                // that aren't text (a file list, a drawing), not failed selections.
+                let (Copied::Text(copied), Some(process_id)) = (copy_selection(false), window_pid) else {
+                    log::debug!("[selection] skipped: no readable text under the mouse");
+                    continue;
+                };
+                (copied, process_id, None, Source::Clipboard)
             }
         };
 
         if !trigger::gesture_near_selection(gesture, rect) {
-            debug_skip("the gesture was not on the selected text");
+            log::debug!("[selection] skipped: the gesture was not on the selected text");
             continue;
         }
         let Some(text) = trigger::prepare_text(&text) else {
-            debug_skip("selection too short");
+            log::debug!("[selection] skipped: selection too short");
             continue;
         };
         // The same text again is only ignored while its popup is still open. After the popup
         // was closed, selecting the same word again should show it again (from the cache).
         if !repeats.accept(&text, Instant::now()) && flow.popup_visible() {
-            debug_skip("same text, popup still open");
+            log::debug!("[selection] skipped: same text, popup still open");
             continue;
         }
         let info = app_of(process_id);
@@ -200,11 +285,19 @@ fn worker(app: AppHandle, rx: Receiver<MouseInput>) {
     }
 }
 
+/// What the clipboard fallback did.
+enum Copied {
+    Text(String),
+    /// It was not allowed, and a notice already told the user why.
+    Noticed,
+    /// It didn't run or nothing was copied, and why (shown to the user).
+    Failed(&'static str),
+}
 
-/// The block list. Defaults until settings exist (Task 7).
-fn block_list() -> BlockList {
+/// The block list from the settings.
+fn block_list(entries: &[String]) -> BlockList {
     #[allow(unused_mut)]
-    let mut list = BlockList::defaults();
+    let mut list = BlockList::new(entries);
     // Debug builds only: extra entries for manual testing, for example
     // `$env:SCREEN_BUDDY_EXTRA_BLOCK = "notepad.exe"` before `npm run tauri dev`.
     #[cfg(debug_assertions)]
@@ -214,35 +307,17 @@ fn block_list() -> BlockList {
     list
 }
 
-/// Logs why a selection was skipped. Never logs any text.
-fn log_skip(reason: &SkipReason) {
-    match reason {
-        SkipReason::OwnWindow => {}
-        SkipReason::PasswordField => println!("[privacy] skipped: password field"),
-        SkipReason::BlockedApp(name) => println!("[privacy] skipped: blocked app {name}"),
-    }
-}
-
-/// Debug builds only: why a gesture did not show a popup, to diagnose "nothing happened".
-/// Never logs any text.
-fn debug_skip(why: &str) {
-    if cfg!(debug_assertions) {
-        println!("[selection] skipped: {why}");
-    }
-}
-
-/// Logs to the console (visible in `npm run tauri dev`; release builds have no console).
+/// Logs a selection. The text itself is logged only in debug builds; the log file of a release
+/// build never contains what the user selected.
 fn log_event(event: &SelectionEvent, source: Source) {
-    const PREVIEW_CHARS: usize = 120;
     let chars = event.text.chars().count();
-    let preview: String = event.text.chars().take(PREVIEW_CHARS).collect();
-    let more = if chars > PREVIEW_CHARS { "…" } else { "" };
-    // Which fallback found the text, to learn what real apps need.
-    let via = if cfg!(debug_assertions) { format!(" via={source:?}") } else { String::new() };
-    println!(
-        "[selection] {} ({}) rect={:?} chars={} text={:?}{}{}",
-        event.app_name, event.process_name, event.rect, chars, preview, more, via
-    );
+    log::info!("[selection] {} ({}) chars={chars} via={source:?}", event.app_name, event.process_name);
+    if cfg!(debug_assertions) {
+        const PREVIEW_CHARS: usize = 120;
+        let preview: String = event.text.chars().take(PREVIEW_CHARS).collect();
+        let more = if chars > PREVIEW_CHARS { "…" } else { "" };
+        log::debug!("[selection] rect={:?} text={preview:?}{more}", event.rect);
+    }
 }
 
 /// The user's double-click speed and distance from Windows settings.

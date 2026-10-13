@@ -7,6 +7,9 @@
 //! 2. the element under the mouse, then its ancestors (selections inside iframes);
 //! 3. both again after `RETRY_DELAY`, if a Text pattern was found but nothing was selected yet.
 //!
+//! Selections inside the PDF viewer built into Chromium browsers are marked (`pdf_viewer`): its
+//! text is shifted from what is on screen, so the worker uses the clipboard fallback there.
+//!
 //! UI Automation client overview: https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-clientsoverview
 //! Text pattern (GetSelection, GetText, GetBoundingRectangles):
 //! https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nn-uiautomationclient-iuiautomationtextpattern
@@ -24,7 +27,15 @@ use ::windows::Win32::System::Ole::{
 };
 use ::windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, IUIAutomationTextRange,
-    IUIAutomationTreeWalker, UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_TextPatternId,
+    IUIAutomationTreeWalker, IUIAutomationValuePattern, UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID,
+    UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_DataGridControlTypeId, UIA_DataItemControlTypeId,
+    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_HeaderControlTypeId, UIA_HeaderItemControlTypeId,
+    UIA_ImageControlTypeId, UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuBarControlTypeId,
+    UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
+    UIA_ScrollBarControlTypeId, UIA_SeparatorControlTypeId, UIA_SliderControlTypeId, UIA_SpinnerControlTypeId,
+    UIA_SplitButtonControlTypeId, UIA_StatusBarControlTypeId, UIA_TabControlTypeId, UIA_TabItemControlTypeId,
+    UIA_TableControlTypeId, UIA_TextPatternId, UIA_ThumbControlTypeId, UIA_TitleBarControlTypeId,
+    UIA_ToolBarControlTypeId, UIA_TreeControlTypeId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
 };
 
 use super::Rect;
@@ -39,6 +50,10 @@ const MAX_TEXT_UNITS: i32 = (MAX_CHARS * 2) as i32;
 const MAX_ANCESTORS: usize = 32;
 /// Wait before the single retry when the selection was still empty.
 const RETRY_DELAY: Duration = Duration::from_millis(150);
+/// The address of the PDF viewer built into Chromium browsers (Edge, Chrome): its UI Automation
+/// element is a web document whose Value is this extension URL (checked in Edge).
+const CHROMIUM_PDF_VIEWER: &str = "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/";
+
 /// How the selection was found. Logged in debug builds to learn which fallbacks real apps need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -46,18 +61,21 @@ pub enum Source {
     Parent,
     Point,
     Retry,
+    /// Not UI Automation: the clipboard fallback (set by the selection worker).
+    Clipboard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadOutcome {
-    Selection { text: String, process_id: u32, rect: Option<Rect>, source: Source },
+    /// `pdf_viewer`: inside Chromium's PDF viewer, whose text can be shifted.
+    Selection { text: String, process_id: u32, rect: Option<Rect>, source: Source, pdf_viewer: bool },
     /// A password field was found. Its text was not read.
     Password { process_id: u32 },
     /// The user is in a text area (edit box or document) that doesn't expose the Text
     /// pattern, so this app can't be read.
     NoTextPattern { process_id: u32 },
     /// The app has readable text here but reports nothing selected.
-    EmptySelection { process_id: u32 },
+    EmptySelection { process_id: u32, pdf_viewer: bool },
     /// The gesture wasn't in a text area (title bar, tab, button, ...).
     NoSelection,
     /// Nothing has keyboard focus and nothing is under the mouse, or both are unreachable
@@ -68,10 +86,10 @@ pub enum ReadOutcome {
 /// What one starting element (focused or under the mouse) and its ancestors offer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Probe {
-    Selection { text: String, process_id: u32, rect: Option<Rect>, via_parent: bool },
+    Selection { text: String, process_id: u32, rect: Option<Rect>, via_parent: bool, pdf_viewer: bool },
     Password { process_id: u32 },
     /// A Text pattern exists but nothing is selected.
-    Empty { process_id: u32 },
+    Empty { process_id: u32, pdf_viewer: bool },
     /// No Text pattern on the element or its ancestors. `text_like`: the element is an
     /// edit box or document, so the user probably expected it to be readable.
     NoPattern { process_id: u32, text_like: bool },
@@ -100,8 +118,8 @@ fn resolve(probe: &impl SelectionProbe, pt: Point, wait: impl FnOnce()) -> ReadO
         Attempt::Retry(_) => {
             wait();
             match try_once(probe, pt) {
-                Attempt::Done(ReadOutcome::Selection { text, process_id, rect, .. }) => {
-                    ReadOutcome::Selection { text, process_id, rect, source: Source::Retry }
+                Attempt::Done(ReadOutcome::Selection { text, process_id, rect, pdf_viewer, .. }) => {
+                    ReadOutcome::Selection { text, process_id, rect, source: Source::Retry, pdf_viewer }
                 }
                 Attempt::Done(outcome) | Attempt::Retry(outcome) => outcome,
             }
@@ -114,9 +132,9 @@ fn try_once(probe: &impl SelectionProbe, pt: Point) -> Attempt {
     match focused {
         // A focused password field ends the read: nothing else is tried.
         Probe::Password { process_id } => return Attempt::Done(ReadOutcome::Password { process_id }),
-        Probe::Selection { text, process_id, rect, via_parent } => {
+        Probe::Selection { text, process_id, rect, via_parent, pdf_viewer } => {
             let source = if via_parent { Source::Parent } else { Source::Focus };
-            return Attempt::Done(ReadOutcome::Selection { text, process_id, rect, source });
+            return Attempt::Done(ReadOutcome::Selection { text, process_id, rect, source, pdf_viewer });
         }
         _ => {}
     }
@@ -124,19 +142,20 @@ fn try_once(probe: &impl SelectionProbe, pt: Point) -> Attempt {
     let at_point = probe.at_point(pt);
     match at_point {
         Probe::Password { process_id } => return Attempt::Done(ReadOutcome::Password { process_id }),
-        Probe::Selection { text, process_id, rect, .. } => {
-            return Attempt::Done(ReadOutcome::Selection { text, process_id, rect, source: Source::Point });
+        Probe::Selection { text, process_id, rect, pdf_viewer, .. } => {
+            let source = Source::Point;
+            return Attempt::Done(ReadOutcome::Selection { text, process_id, rect, source, pdf_viewer });
         }
         _ => {}
     }
 
     // The text under the mouse matters most, so its process is reported first.
     let empty = [&at_point, &focused].into_iter().find_map(|p| match p {
-        Probe::Empty { process_id } => Some(*process_id),
+        Probe::Empty { process_id, pdf_viewer } => Some((*process_id, *pdf_viewer)),
         _ => None,
     });
-    if let Some(process_id) = empty {
-        return Attempt::Retry(ReadOutcome::EmptySelection { process_id });
+    if let Some((process_id, pdf_viewer)) = empty {
+        return Attempt::Retry(ReadOutcome::EmptySelection { process_id, pdf_viewer });
     }
     let text_like = [&focused, &at_point].into_iter().find_map(|p| match p {
         Probe::NoPattern { process_id, text_like: true } => Some(*process_id),
@@ -212,9 +231,12 @@ impl UiaReader {
                 }
                 if let Ok(pattern) = current.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) {
                     let process_id = current.CurrentProcessId().map_or(process_id, |p| p as u32);
+                    let pdf_viewer = self.in_chromium_pdf_viewer(&current);
                     return match read_selection(&pattern) {
-                        Ok(Some((text, rect))) => Probe::Selection { text, process_id, rect, via_parent: depth > 0 },
-                        Ok(None) => Probe::Empty { process_id },
+                        Ok(Some((text, rect))) => {
+                            Probe::Selection { text, process_id, rect, via_parent: depth > 0, pdf_viewer }
+                        }
+                        Ok(None) => Probe::Empty { process_id, pdf_viewer },
                         Err(_) => Probe::Unavailable,
                     };
                 }
@@ -226,6 +248,55 @@ impl UiaReader {
                 current = parent;
             }
             Probe::NoPattern { process_id, text_like }
+        }
+    }
+
+    /// Whether the element under `pt` could hold a text selection, so the clipboard fallback may
+    /// copy there. `false` if UI Automation can't tell.
+    ///
+    /// ElementFromPoint: https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomation-elementfrompoint
+    pub fn may_hold_selection_at(&self, pt: Point) -> bool {
+        // SAFETY: COM calls on the thread that owns `self`.
+        unsafe {
+            let Ok(element) = self.automation.ElementFromPoint(POINT { x: pt.x, y: pt.y }) else { return false };
+            let web = element.CurrentFrameworkId().is_ok_and(|id| id == "Chrome");
+            let Ok(control_type) = element.CurrentControlType() else { return false };
+            let allowed = may_hold_selection(control_type, web);
+            if !allowed {
+                log::debug!("[selection] no copy on control type {} (web: {web})", control_type.0);
+            }
+            allowed
+        }
+    }
+
+    /// Whether `element` is inside the PDF viewer of a Chromium browser: one of its ancestors
+    /// is a document whose Value (its address) is the viewer's extension URL. The address is only
+    /// compared, never stored or logged.
+    ///
+    /// FrameworkId: https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomationelement-get_currentframeworkid
+    /// Value pattern: https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nn-uiautomationclient-iuiautomationvaluepattern
+    fn in_chromium_pdf_viewer(&self, element: &IUIAutomationElement) -> bool {
+        // SAFETY: COM calls on the thread that owns `self`.
+        unsafe {
+            // Chromium content reports the framework "Chrome"; other apps skip the walk.
+            if element.CurrentFrameworkId().map_or(true, |id| id != "Chrome") {
+                return false;
+            }
+            let mut current = element.clone();
+            for _ in 0..=MAX_ANCESTORS {
+                if current.CurrentControlType().is_ok_and(|t| t == UIA_DocumentControlTypeId)
+                    && let Ok(value) = current.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                    && value.CurrentValue().is_ok_and(|url| url.to_string().starts_with(CHROMIUM_PDF_VIEWER))
+                {
+                    return true;
+                }
+                let Ok(parent) = self.walker.GetParentElement(&current) else { return false };
+                if self.automation.CompareElements(&parent, &self.root).is_ok_and(|same| same.as_bool()) {
+                    return false;
+                }
+                current = parent;
+            }
+            false
         }
     }
 }
@@ -256,6 +327,53 @@ impl SelectionProbe for UiaReader {
 fn is_password(element: &IUIAutomationElement) -> bool {
     // SAFETY: COM property read on the owning thread.
     unsafe { element.CurrentIsPassword().map_or(true, |b| b.as_bool()) }
+}
+
+/// Controls that never hold a text selection. A drag or double-click on them (a scroll bar, a
+/// button, a menu) must not send a copy shortcut. Everything else may: custom-drawn apps often
+/// show their text in a plain Pane or Window.
+///
+/// Lists, trees, tables and images (`WEB_TEXT`) depend on `web`: in web pages and Electron apps
+/// they hold ordinary text (`<li>`, table cells, and text drawn on a `<canvas>`, which UI Automation
+/// calls an image: the xterm.js terminal of VS Code-like editors). In native apps they are file
+/// lists, pictures and the like, where a copy would copy files or images, not text.
+///
+/// Control types: https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-controltypesoverview
+fn may_hold_selection(control_type: UIA_CONTROLTYPE_ID, web: bool) -> bool {
+    const WEB_TEXT: &[UIA_CONTROLTYPE_ID] = &[
+        UIA_ImageControlTypeId,
+        UIA_ListControlTypeId,
+        UIA_ListItemControlTypeId,
+        UIA_TreeControlTypeId,
+        UIA_TreeItemControlTypeId,
+        UIA_TableControlTypeId,
+        UIA_DataGridControlTypeId,
+        UIA_DataItemControlTypeId,
+    ];
+    const NEVER: &[UIA_CONTROLTYPE_ID] = &[
+        UIA_ButtonControlTypeId,
+        UIA_SplitButtonControlTypeId,
+        UIA_CheckBoxControlTypeId,
+        UIA_RadioButtonControlTypeId,
+        UIA_ComboBoxControlTypeId,
+        UIA_TitleBarControlTypeId,
+        UIA_ScrollBarControlTypeId,
+        UIA_ThumbControlTypeId,
+        UIA_SliderControlTypeId,
+        UIA_SpinnerControlTypeId,
+        UIA_ProgressBarControlTypeId,
+        UIA_TabControlTypeId,
+        UIA_TabItemControlTypeId,
+        UIA_MenuBarControlTypeId,
+        UIA_MenuControlTypeId,
+        UIA_MenuItemControlTypeId,
+        UIA_ToolBarControlTypeId,
+        UIA_StatusBarControlTypeId,
+        UIA_SeparatorControlTypeId,
+        UIA_HeaderControlTypeId,
+        UIA_HeaderItemControlTypeId,
+    ];
+    !NEVER.contains(&control_type) && (web || !WEB_TEXT.contains(&control_type))
 }
 
 /// Edit boxes and documents are where users select text.
@@ -371,15 +489,15 @@ mod tests {
     }
 
     fn selection(text: &str, via_parent: bool) -> Probe {
-        Probe::Selection { text: text.into(), process_id: 7, rect: None, via_parent }
+        Probe::Selection { text: text.into(), process_id: 7, rect: None, via_parent, pdf_viewer: false }
     }
 
     fn empty(process_id: u32) -> Probe {
-        Probe::Empty { process_id }
+        Probe::Empty { process_id, pdf_viewer: false }
     }
 
     fn outcome(text: &str, source: Source) -> ReadOutcome {
-        ReadOutcome::Selection { text: text.into(), process_id: 7, rect: None, source }
+        ReadOutcome::Selection { text: text.into(), process_id: 7, rect: None, source, pdf_viewer: false }
     }
 
     fn run(fake: &Fake) -> (ReadOutcome, bool) {
@@ -415,6 +533,57 @@ mod tests {
     }
 
     #[test]
+    fn controls_without_text_never_get_a_copy() {
+        for web in [false, true] {
+            assert!(!may_hold_selection(UIA_TitleBarControlTypeId, web));
+            assert!(!may_hold_selection(UIA_ScrollBarControlTypeId, web));
+            assert!(!may_hold_selection(UIA_ButtonControlTypeId, web));
+            assert!(may_hold_selection(UIA_DocumentControlTypeId, web));
+            assert!(may_hold_selection(UIA_EditControlTypeId, web));
+            // A plain Pane (50033) or Text (50020): custom-drawn apps.
+            assert!(may_hold_selection(UIA_CONTROLTYPE_ID(50033), web));
+            assert!(may_hold_selection(UIA_CONTROLTYPE_ID(50020), web));
+        }
+    }
+
+    #[test]
+    fn lists_hold_text_only_in_web_content() {
+        // A file list in Explorer: no.
+        assert!(!may_hold_selection(UIA_ListItemControlTypeId, false));
+        assert!(!may_hold_selection(UIA_DataItemControlTypeId, false));
+        // An <li> on a web page, or the xterm.js terminal of VS Code-like editors: yes.
+        assert!(may_hold_selection(UIA_ListItemControlTypeId, true));
+        assert!(may_hold_selection(UIA_ListControlTypeId, true));
+        assert!(may_hold_selection(UIA_DataItemControlTypeId, true));
+    }
+
+    #[test]
+    fn canvas_text_counts_only_in_web_content() {
+        // xterm.js draws the terminal of VS Code-like editors on a <canvas>: an Image to UIA.
+        assert!(may_hold_selection(UIA_ImageControlTypeId, true));
+        // A picture in a native app: no.
+        assert!(!may_hold_selection(UIA_ImageControlTypeId, false));
+    }
+
+    #[test]
+    fn pdf_viewer_flag_is_passed_on() {
+        let pdf = Probe::Selection { text: "shifted".into(), process_id: 7, rect: None, via_parent: true, pdf_viewer: true };
+        let fake = Fake::new(vec![pdf], vec![]);
+        let expected = ReadOutcome::Selection {
+            text: "shifted".into(),
+            process_id: 7,
+            rect: None,
+            source: Source::Parent,
+            pdf_viewer: true,
+        };
+        assert_eq!(run(&fake).0, expected);
+
+        let empty_pdf = Probe::Empty { process_id: 7, pdf_viewer: true };
+        let fake = Fake::new(vec![empty_pdf.clone(), empty_pdf], vec![Probe::Unavailable, Probe::Unavailable]);
+        assert_eq!(run(&fake).0, ReadOutcome::EmptySelection { process_id: 7, pdf_viewer: true });
+    }
+
+    #[test]
     fn point_password_is_never_read() {
         let fake = Fake::new(
             vec![Probe::NoPattern { process_id: 1, text_like: false }],
@@ -432,16 +601,16 @@ mod tests {
     #[test]
     fn still_empty_after_retry_is_empty_selection() {
         let fake = Fake::new(vec![empty(9), empty(9)], vec![empty(9), empty(9)]);
-        assert_eq!(run(&fake), (ReadOutcome::EmptySelection { process_id: 9 }, true));
+        assert_eq!(run(&fake), (ReadOutcome::EmptySelection { process_id: 9, pdf_viewer: false }, true));
         assert_eq!(fake.point_calls.get(), 2);
     }
 
     #[test]
     fn empty_selection_reports_the_process_under_the_mouse() {
         let fake = Fake::new(vec![empty(1), empty(1)], vec![empty(2), empty(2)]);
-        assert_eq!(run(&fake).0, ReadOutcome::EmptySelection { process_id: 2 });
+        assert_eq!(run(&fake).0, ReadOutcome::EmptySelection { process_id: 2, pdf_viewer: false });
         let fake = Fake::new(vec![empty(1), empty(1)], vec![Probe::Unavailable, Probe::Unavailable]);
-        assert_eq!(run(&fake).0, ReadOutcome::EmptySelection { process_id: 1 });
+        assert_eq!(run(&fake).0, ReadOutcome::EmptySelection { process_id: 1, pdf_viewer: false });
     }
 
     #[test]

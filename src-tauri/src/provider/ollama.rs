@@ -47,19 +47,24 @@ impl OllamaProvider {
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base_url)
     }
-}
 
-impl Provider for OllamaProvider {
-    /// `GET /api/tags` lists the installed models.
-    async fn health(&self, model: &str) -> Result<(), ProviderError> {
+    /// Names of the installed models, from `GET /api/tags`.
+    pub async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
         let response =
             self.client.get(self.url("/api/tags")).timeout(HEALTH_TIMEOUT).send().await.map_err(from_reqwest)?;
         if !response.status().is_success() {
-            return Err(status_error(response, model).await);
+            return Err(status_error(response, "").await);
         }
         let body = response.bytes().await.map_err(from_reqwest)?;
         let tags: Tags = serde_json::from_slice(&body).map_err(|_| ProviderError::BadResponse)?;
-        if model_installed(tags.models.iter().map(|m| m.name.as_str()), model) {
+        Ok(tags.models.into_iter().map(|m| m.name).collect())
+    }
+}
+
+impl Provider for OllamaProvider {
+    async fn health(&self, model: &str) -> Result<(), ProviderError> {
+        let installed = self.list_models().await?;
+        if model_installed(installed.iter().map(String::as_str), model) {
             Ok(())
         } else {
             Err(ProviderError::ModelMissing(model.to_owned()))
@@ -494,6 +499,14 @@ mod tests {
         ];
         let (result, _) = chat(&serve_once(parts));
         assert_eq!(result, Err(ProviderError::Ollama("model runner has unexpectedly stopped".into())));
+    }
+
+    #[test]
+    fn list_models_returns_the_names() {
+        let tags = r#"{"models":[{"name":"qwen3.5:4b"},{"name":"llama3.2:1b","size":5}]}"#;
+        let base = serve_once(vec![json_response("200 OK", tags)]);
+        let provider = OllamaProvider::with_base_url(&base).unwrap();
+        assert_eq!(block_on(provider.list_models()).unwrap(), ["qwen3.5:4b", "llama3.2:1b"]);
     }
 
     #[test]

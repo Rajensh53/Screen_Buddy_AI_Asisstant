@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Settings window: app info and app events.",
+  "description": "Settings window: app info and app events. Settings are read and saved through app commands, which check that they come from this window.",
   "windows": ["settings"],
   "permissions": ["core:app:default", "core:event:default"]
 }

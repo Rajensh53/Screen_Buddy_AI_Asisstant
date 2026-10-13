@@ -11,7 +11,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         if let WindowEvent::CloseRequested { api, .. } = event {
             api.prevent_close();
             if let Err(err) = handle.hide() {
-                eprintln!("could not hide settings window: {err}");
+                log::warn!("could not hide settings window: {err}");
             }
         }
     });

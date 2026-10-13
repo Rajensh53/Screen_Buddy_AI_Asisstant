@@ -62,10 +62,17 @@ impl BlockList {
         Self::new(DEFAULT_BLOCKED)
     }
 
-    /// Adds more entries, for example from settings or a debug override.
-    #[cfg_attr(not(debug_assertions), allow(dead_code, reason = "used by settings from Task 7"))]
+    /// Adds more entries, for example a debug override.
+    #[cfg_attr(not(debug_assertions), allow(dead_code, reason = "only the debug override uses it"))]
     pub fn extend(&mut self, entries: impl IntoIterator<Item = impl AsRef<str>>) {
         self.apps.extend(entries.into_iter().filter_map(|e| normalize(e.as_ref())));
+    }
+
+    /// The normalized entries, sorted, for showing and saving.
+    pub fn entries(&self) -> Vec<String> {
+        let mut entries: Vec<String> = self.apps.iter().cloned().collect();
+        entries.sort();
+        entries
     }
 
     pub fn contains(&self, process_name: &str) -> bool {
@@ -217,6 +224,12 @@ mod tests {
             assert!(list.contains(name), "{name} should be blocked by default");
         }
         assert!(!list.contains("notepad.exe"));
+    }
+
+    #[test]
+    fn entries_are_normalized_sorted_and_unique() {
+        let list = BlockList::new(["Notepad", "notepad.exe", " B.exe "]);
+        assert_eq!(list.entries(), ["b.exe", "notepad.exe"]);
     }
 
     #[test]

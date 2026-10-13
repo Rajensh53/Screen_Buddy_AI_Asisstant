@@ -1,6 +1,7 @@
-import type { BuddyEvent } from "../shared/events";
+import type { BuddyEvent, Notice } from "../shared/events";
 
-export type Status = "thinking" | "streaming" | "done" | "error";
+/** `notice`: a problem shown instead of an answer (see `notice`). */
+export type Status = "thinking" | "streaming" | "done" | "error" | "notice";
 
 export interface AnswerView {
   id: number;
@@ -8,6 +9,7 @@ export interface AnswerView {
   text: string;
   status: Status;
   error?: string;
+  notice?: Notice;
 }
 
 /** Applies one event. Events for an older selection (stale `id`) are ignored. */
@@ -15,6 +17,8 @@ export function reduce(view: AnswerView | null, event: BuddyEvent): AnswerView |
   switch (event.kind) {
     case "start":
       return { id: event.id, title: event.title, text: "", status: "thinking" };
+    case "notice":
+      return { id: event.id, title: event.notice.title, text: "", status: "notice", notice: event.notice };
     case "chunk":
       return view?.id === event.id ? { ...view, text: view.text + event.text, status: "streaming" } : view;
     case "done":

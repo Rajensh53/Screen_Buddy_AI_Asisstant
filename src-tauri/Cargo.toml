@@ -21,16 +21,29 @@ tauri = { version = "2", features = ["tray-icon"] }
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Persisted settings (settings.json in the app data folder). Used from Rust only.
+tauri-plugin-store = "2"
+# A second launch opens Settings instead of a second app with a second mouse hook.
+tauri-plugin-single-instance = "2"
+# Log file in the app's log folder (release builds have no console). Never logs selected text.
+tauri-plugin-log = "2"
+log = "0.4"
 # Same version Tauri uses internally, so it is compiled only once.
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    # Clipboard fallback for the PDF viewer (opt-in): clipboard, its memory, and the
+    # registry values that say whether clipboard history or cloud sync is on.
+    "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
     "Win32_System_Ole",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Accessibility",
-    # Only for GetDoubleClickTime. No keyboard hook is ever installed.
+    # GetDoubleClickTime; for the opt-in PDF clipboard fallback also GetAsyncKeyState and
+    # SendInput (Ctrl+C). No keyboard hook is ever installed.
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }

@@ -1,5 +1,7 @@
 //! Connects a selection to an answer: shows the popup next to the selection, streams the
-//! explanation into it, and tells the mascot what is happening.
+//! explanation into it, and tells the mascot what is happening. Problems the user should know
+//! about (an app that can't be read, a privacy skip, Ollama not running, ...) are shown in the
+//! same popup as short notices (see `notice`).
 //!
 //! Flow: selection worker -> `on_selection` -> `buddy` events to the popup and mascot,
 //! answer streamed by a Tauri async task. A new selection or a click outside the popup
@@ -8,18 +10,19 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::async_runtime::{self, JoinHandle};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 use crate::explainer::{self, Explained, Explainer};
-use crate::provider::DEFAULT_MODEL;
+use crate::notice::{self, Context, Notice, NoticeKind, NoticeThrottle};
+use crate::provider::ProviderError;
 use crate::provider::ollama::OllamaProvider;
-use crate::selection::{Point, Rect, SelectionEvent};
+use crate::selection::{Point, Rect, SelectionEvent, clipboard};
 use crate::windows::placement::{self, HeightLimits, Side, Size};
-use crate::windows::{POPUP, popup};
+use crate::windows::{self as app_windows, POPUP, mascot, popup};
 
 /// Event name for `BuddyEvent`, listened to by the popup and the mascot.
 pub const BUDDY_EVENT: &str = "buddy";
@@ -36,6 +39,8 @@ const TITLE_CHARS: usize = 80;
 /// The popup is shown once it has rendered the new selection and reported its size, so it
 /// never flashes the previous answer or jumps in size. This is the fallback if no report comes.
 const SHOW_FALLBACK: Duration = Duration::from_millis(250);
+/// Startup notices wait until the windows have loaded and listen for events.
+const STARTUP_NOTICE_DELAY: Duration = Duration::from_secs(3);
 
 /// What the windows are told. Serialized as `{ "kind": "start", ... }`; mirrored in
 /// `src/shared/events.ts`.
@@ -46,8 +51,19 @@ pub enum BuddyEvent {
     Chunk { id: u64, text: String },
     Done { id: u64, cached: bool },
     Error { id: u64, message: String },
+    /// A problem shown in the popup instead of an answer.
+    Notice { id: u64, notice: Notice },
     CantRead,
     Hide,
+}
+
+/// What a popup is placed next to.
+#[derive(Debug, Clone, Copy)]
+pub enum PopupAnchor {
+    /// The selection (or the pointer, where the mouse was released, if its rectangle is unknown).
+    Selection { rect: Option<Rect>, pointer: Point },
+    /// The mascot: for problems at startup, which have no selection.
+    Mascot,
 }
 
 /// The popup for the current selection, kept so it can grow next to the same selection and so
@@ -72,30 +88,80 @@ pub struct Flow {
     current: Mutex<Option<JoinHandle<()>>>,
     next_id: AtomicU64,
     popup: Mutex<Option<PopupState>>,
+    /// The last selection, in memory only, for Retry.
+    last_selection: Mutex<Option<(SelectionEvent, Point)>>,
+    throttle: Mutex<NoticeThrottle>,
 }
 
 impl Flow {
-    pub fn new(app: AppHandle) -> reqwest::Result<Self> {
-        let explainer = Explainer::new(OllamaProvider::new()?, DEFAULT_MODEL);
+    /// `model` comes from the settings.
+    pub fn new(app: AppHandle, model: &str) -> reqwest::Result<Self> {
+        let explainer = Explainer::new(OllamaProvider::new()?, model);
         Ok(Self {
             app,
             explainer: Arc::new(explainer),
             current: Mutex::new(None),
             next_id: AtomicU64::new(0),
             popup: Mutex::new(None),
+            last_selection: Mutex::new(None),
+            throttle: Mutex::new(NoticeThrottle::default()),
         })
     }
 
-    /// Logs at startup whether Ollama and the model are ready. The app works either way;
-    /// the popup shows the same message when a selection is explained.
+    /// The settings changed the model: the next selection uses it.
+    pub fn set_model(&self, model: &str) {
+        self.explainer.set_model(model);
+    }
+
+    /// Checks at startup that Ollama runs and has the model. If not, a notice next to the
+    /// mascot says what to do, so the first selection doesn't fail without warning.
     pub fn check_ollama(&self) {
-        let explainer = Arc::clone(&self.explainer);
-        async_runtime::spawn(async move {
-            match explainer.health().await {
-                Ok(()) => println!("[ollama] ready"),
-                Err(err) => println!("[ollama] {err}"),
+        let app = self.app.clone();
+        let spawned = thread::Builder::new().name("ollama-check".into()).spawn(move || {
+            thread::sleep(STARTUP_NOTICE_DELAY);
+            let flow = app.state::<Flow>();
+            match async_runtime::block_on(flow.explainer.health()) {
+                Ok(()) => log::info!("[ollama] ready"),
+                Err(err) => {
+                    log::warn!("[ollama] {err}");
+                    if let Some(kind) = ollama_notice(&err) {
+                        let model = flow.explainer.model();
+                        let cx = Context { model: Some(&model), at_startup: true, ..Context::default() };
+                        flow.notify(kind, cx, PopupAnchor::Mascot);
+                    }
+                }
             }
         });
+        if let Err(err) = spawned {
+            log::warn!("[ollama] startup check not run: {err}");
+        }
+    }
+
+    /// A problem at startup (the mouse hook or UI Automation didn't start): shown next to the
+    /// mascot once the windows are ready.
+    pub fn notify_startup(&self, kind: NoticeKind, reason: String) {
+        log::error!("[startup] {kind:?}: {reason}");
+        let app = self.app.clone();
+        let _ = thread::Builder::new().name("startup-notice".into()).spawn(move || {
+            thread::sleep(STARTUP_NOTICE_DELAY);
+            let cx = Context { reason: Some(&reason), at_startup: true, ..Context::default() };
+            app.state::<Flow>().notify(kind, cx, PopupAnchor::Mascot);
+        });
+    }
+
+    /// Shows a notice in the popup. The same notice for the same app is shown once every few
+    /// minutes (`notice::REPEAT_AFTER`); in between only the mascot reacts.
+    pub fn notify(&self, kind: NoticeKind, cx: Context, anchor: PopupAnchor) {
+        let shown = lock(&self.throttle).should_show(kind, cx.app.unwrap_or(""), Instant::now());
+        if !shown {
+            emit(&self.app, BuddyEvent::CantRead);
+            return;
+        }
+        log::info!("[notice] {kind:?}");
+        self.cancel_answer();
+        let id = self.next_id();
+        self.open_popup(id, anchor);
+        emit(&self.app, BuddyEvent::Notice { id, notice: notice::notice(kind, cx) });
     }
 
     /// A new selection: cancel the old answer, show the popup and stream the new answer.
@@ -105,14 +171,10 @@ impl Flow {
             return;
         }
         self.cancel_answer();
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst) + 1;
-        self.prepare_popup(id, event.rect, pointer);
+        *lock(&self.last_selection) = Some((event.clone(), pointer));
+        let id = self.next_id();
+        self.open_popup(id, PopupAnchor::Selection { rect: event.rect, pointer });
         emit(&self.app, BuddyEvent::Start { id, title: title_for(&event.text) });
-        let app = self.app.clone();
-        thread::spawn(move || {
-            thread::sleep(SHOW_FALLBACK);
-            app.state::<Flow>().update_popup(id, None, false);
-        });
 
         let app = self.app.clone();
         let explainer = Arc::clone(&self.explainer);
@@ -123,11 +185,22 @@ impl Flow {
                 .await;
             let end = match result {
                 Ok(explained) => BuddyEvent::Done { id, cached: explained == Explained::Cached },
-                Err(err) => BuddyEvent::Error { id, message: err.to_string() },
+                Err(err) => {
+                    log::warn!("[answer] {err}");
+                    BuddyEvent::Error { id, message: err.to_string() }
+                }
             };
             emit(&app, end);
         });
         *lock(&self.current) = Some(task);
+    }
+
+    /// Asks again for the last selection (the popup's Retry button).
+    pub fn retry(&self) {
+        let last = lock(&self.last_selection).clone();
+        if let Some((event, pointer)) = last {
+            self.on_selection(event, pointer);
+        }
     }
 
     /// Every left-button press: a press outside the visible popup hides it.
@@ -143,11 +216,6 @@ impl Flow {
         lock(&self.popup).is_some()
     }
 
-    /// An app whose text can't be read: the mascot shows it briefly, no popup.
-    pub fn on_cant_read(&self) {
-        emit(&self.app, BuddyEvent::CantRead);
-    }
-
     /// Hides the popup and stops the running answer.
     pub fn hide(&self) {
         self.cancel_answer();
@@ -156,6 +224,20 @@ impl Flow {
             emit(&self.app, BuddyEvent::Hide);
             run_on_popup(&self.app, popup::hide);
         }
+    }
+
+    fn next_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Places the popup for `id` and makes sure it shows, even if the page never reports its size.
+    fn open_popup(&self, id: u64, anchor: PopupAnchor) {
+        self.prepare_popup(id, anchor);
+        let app = self.app.clone();
+        thread::spawn(move || {
+            thread::sleep(SHOW_FALLBACK);
+            app.state::<Flow>().update_popup(id, None, false);
+        });
     }
 
     /// Resizes the popup of selection `id` for content that needs `css_height` (CSS pixels;
@@ -193,8 +275,17 @@ impl Flow {
         });
     }
 
-    /// Places the popup for selection `id`. It is shown by `update_popup`.
-    fn prepare_popup(&self, id: u64, selection: Option<Rect>, pointer: Point) {
+    /// Places the popup for `id`. It is shown by `update_popup`.
+    fn prepare_popup(&self, id: u64, anchor: PopupAnchor) {
+        // Next to a selection: below it if possible. Next to the mascot (bottom-right corner
+        // by default): above it.
+        let (selection, pointer, prefer) = match anchor {
+            PopupAnchor::Selection { rect, pointer } => (rect, pointer, Side::Below),
+            PopupAnchor::Mascot => match mascot::bounds(&self.app) {
+                Some(r) => (Some(r), Point::new((r.left + r.right) / 2, (r.top + r.bottom) / 2), Side::Above),
+                None => (None, Point::new(0, 0), Side::Above),
+            },
+        };
         let monitor = self
             .app
             .monitor_from_point(f64::from(pointer.x), f64::from(pointer.y))
@@ -202,7 +293,7 @@ impl Flow {
             .flatten()
             .or_else(|| self.app.primary_monitor().ok().flatten());
         let Some(monitor) = monitor else {
-            eprintln!("[popup] no monitor found");
+            log::warn!("[popup] no monitor found");
             return;
         };
         let area = monitor.work_area();
@@ -218,7 +309,7 @@ impl Flow {
             height: (POPUP_START_HEIGHT * scale).round() as i32,
         };
         let anchor = placement::anchor(selection, pointer, work_area);
-        let (bounds, side) = placement::place(anchor, size, work_area, Side::Below);
+        let (bounds, side) = placement::place(anchor, size, work_area, prefer);
 
         *lock(&self.popup) = Some(PopupState { id, visible: false, anchor, work_area, scale, side, bounds });
     }
@@ -231,13 +322,60 @@ impl Flow {
     }
 }
 
+/// Which Ollama problems get a notice at startup; others are only logged.
+fn ollama_notice(err: &ProviderError) -> Option<NoticeKind> {
+    match err {
+        ProviderError::NotRunning => Some(NoticeKind::OllamaNotRunning),
+        ProviderError::ModelMissing(_) => Some(NoticeKind::ModelMissing),
+        _ => None,
+    }
+}
+
+// --- Commands for the popup window ---
+
+fn only_popup(window: &WebviewWindow) -> Result<(), String> {
+    if window.label() == POPUP { Ok(()) } else { Err("not allowed from this window".to_owned()) }
+}
+
 /// Called by the popup after rendering selection `id`, with the height its content needs
 /// (CSS pixels) and whether the answer is complete.
 #[tauri::command]
 pub fn popup_resize(window: WebviewWindow, flow: State<'_, Flow>, id: u64, height: f64, complete: bool) {
-    if window.label() == POPUP {
+    if only_popup(&window).is_ok() {
         flow.update_popup(id, Some(height), complete);
     }
+}
+
+/// The popup's × button.
+#[tauri::command]
+pub fn popup_close(window: WebviewWindow, flow: State<'_, Flow>) -> Result<(), String> {
+    only_popup(&window)?;
+    flow.hide();
+    Ok(())
+}
+
+/// The popup's Retry button, after an error.
+#[tauri::command]
+pub fn popup_retry(window: WebviewWindow, flow: State<'_, Flow>) -> Result<(), String> {
+    only_popup(&window)?;
+    flow.retry();
+    Ok(())
+}
+
+/// The popup's Copy button: puts the answer on the clipboard. The user asked for it, so unlike
+/// the clipboard fallback it is meant to stay there (and in Win+V history).
+#[tauri::command]
+pub fn popup_copy(window: WebviewWindow, text: String) -> Result<(), String> {
+    only_popup(&window)?;
+    clipboard::set_text(&text).map_err(str::to_owned)
+}
+
+/// The "Open Settings" button on a notice.
+#[tauri::command]
+pub fn popup_open_settings(window: WebviewWindow, app: AppHandle, flow: State<'_, Flow>) -> Result<(), String> {
+    only_popup(&window)?;
+    flow.hide();
+    app_windows::settings::open(&app).map_err(|e| e.to_string())
 }
 
 /// The selection as a one-line title: whitespace collapsed, cut on a character boundary.
@@ -251,7 +389,7 @@ fn title_for(text: &str) -> String {
 
 fn emit(app: &AppHandle, event: BuddyEvent) {
     if let Err(err) = app.emit(BUDDY_EVENT, &event) {
-        eprintln!("[flow] could not emit {BUDDY_EVENT}: {err}");
+        log::warn!("[flow] could not emit {BUDDY_EVENT}: {err}");
     }
 }
 
@@ -262,11 +400,11 @@ fn run_on_popup(app: &AppHandle, f: impl FnOnce(&WebviewWindow) -> popup::Result
         if let Some(window) = handle.get_webview_window(POPUP)
             && let Err(err) = f(&window)
         {
-            eprintln!("[popup] {err}");
+            log::warn!("[popup] {err}");
         }
     });
     if let Err(err) = result {
-        eprintln!("[popup] {err}");
+        log::warn!("[popup] {err}");
     }
 }
 
@@ -294,6 +432,24 @@ mod tests {
         for (event, expected) in cases {
             assert_eq!(serde_json::to_value(&event).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn notice_event_shape() {
+        let notice = notice::notice(NoticeKind::PasswordField, Context::default());
+        let value = serde_json::to_value(BuddyEvent::Notice { id: 3, notice }).unwrap();
+        assert_eq!(value["kind"], "notice");
+        assert_eq!(value["id"], 3);
+        assert_eq!(value["notice"]["kind"], "password_field");
+        assert_eq!(value["notice"]["action"], serde_json::Value::Null);
+        assert!(value["notice"]["title"].is_string() && value["notice"]["detail"].is_string());
+    }
+
+    #[test]
+    fn only_some_ollama_errors_get_a_startup_notice() {
+        assert_eq!(ollama_notice(&ProviderError::NotRunning), Some(NoticeKind::OllamaNotRunning));
+        assert_eq!(ollama_notice(&ProviderError::ModelMissing("m".into())), Some(NoticeKind::ModelMissing));
+        assert_eq!(ollama_notice(&ProviderError::Timeout), None);
     }
 
     #[test]

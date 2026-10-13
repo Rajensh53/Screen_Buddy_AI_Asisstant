@@ -13,8 +13,14 @@ focused on meaning and translation only.
 
 ## Hard rules (never break these)
 
-- Read text with Windows UI Automation only. No clipboard, no screenshots,
-  unless the user has enabled the opt-in clipboard fallback for that specific app.
+- Read text with Windows UI Automation first. No screenshots, ever.
+  Only when UI Automation can't give the selection (or gives wrong text, like Edge's PDF viewer),
+  use the clipboard fallback (Ctrl+C via SendInput). It is on by default; the user can turn it off in Settings.
+  It never runs when Windows cloud clipboard sync is on, on a window's frame (title bar, borders,
+  scroll bars), on controls without text (buttons, menus; native file lists), in password fields or blocked apps.
+  Terminals get their own copy keys (Ctrl+Insert or Ctrl+Shift+C), never Ctrl+C, which would stop the running program.
+  It always restores the user's previous clipboard and never logs the copied text.
+  (Changed on 2026-10-13 at the user's request; before, the clipboard was opt-in per app.)
 - Never install a keyboard hook. Mouse hook only.
 - Never send selected text anywhere except the local Ollama endpoint `http://127.0.0.1:11434`.
 - Skip password fields (UIA `IsPassword`) and apps on the user's block list.
@@ -45,8 +51,9 @@ src-tauri/src/
   privacy/     gate.rs                                    -> Allow | Skip(reason)
   explainer/   prompt.rs, cache.rs, lang.rs
   provider/    mod.rs (trait Provider), ollama.rs
-  windows/     mascot.rs, popup.rs, settings.rs           (create, position, show/hide)
-  settings.rs
+  windows/     mascot.rs, popup.rs, settings.rs, placement.rs (create, position, show/hide)
+  flow.rs      selection -> popup + mascot events, retry; notice.rs: user-facing problem messages
+  settings.rs  persisted settings + settings-window commands; tray.rs: tray + mascot menu
   lib.rs, main.rs
 src/
   mascot/  popup/  settings/
@@ -118,7 +125,7 @@ The popup must render Urdu right-to-left with a font that supports Urdu.
    Mascot switches states on events.
 7. Settings: model name, block list, pause, history on/off (persisted).
 
-Later phases: character art and animation, opt-in clipboard fallback per app, installer and
+Later phases: character art and animation, installer and
 code signing, first-run Ollama setup, auto-update, then agent features.
 
 ## How to work in this repo

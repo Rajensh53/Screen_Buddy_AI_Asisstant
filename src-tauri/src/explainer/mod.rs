@@ -29,18 +29,28 @@ pub enum Explained {
 
 pub struct Explainer<P> {
     provider: P,
-    model: String,
+    /// Changed from the settings window; each answer uses the model set when it started.
+    model: Mutex<String>,
     cache: Mutex<LruCache<Key, String>>,
 }
 
 impl<P: Provider> Explainer<P> {
     pub fn new(provider: P, model: impl Into<String>) -> Self {
-        Self { provider, model: model.into(), cache: Mutex::new(LruCache::new(CACHE_CAPACITY)) }
+        Self { provider, model: Mutex::new(model.into()), cache: Mutex::new(LruCache::new(CACHE_CAPACITY)) }
+    }
+
+    /// Uses `model` from now on. Cached answers stay per model, so none are mixed up.
+    pub fn set_model(&self, model: impl Into<String>) {
+        *self.model.lock().unwrap_or_else(PoisonError::into_inner) = model.into();
+    }
+
+    pub fn model(&self) -> String {
+        self.model.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// Checks that the model can answer (server running, model installed).
     pub async fn health(&self) -> Result<(), ProviderError> {
-        self.provider.health(&self.model).await
+        self.provider.health(&self.model()).await
     }
 
     /// Explains `text`, passing the answer to `on_chunk` piece by piece.
@@ -53,7 +63,7 @@ impl<P: Provider> Explainer<P> {
         let Some(text) = prompt::clean_input(text) else {
             return Ok(Explained::NothingToExplain);
         };
-        let key = (self.model.clone(), text);
+        let key = (self.model(), text);
 
         // The lock is released at the end of this statement, before any await.
         let cached = self.cache().get(&key).cloned();
@@ -64,7 +74,7 @@ impl<P: Provider> Explainer<P> {
 
         let mut answer = String::new();
         let user = prompt::user_message(&key.1);
-        let request = prompt::build_request(&self.model, &user);
+        let request = prompt::build_request(&key.0, &user);
         self.provider
             .stream_chat(request, |piece| {
                 answer.push_str(piece);
@@ -156,6 +166,17 @@ mod tests {
         assert_eq!(result, Ok(Explained::Cached));
         assert_eq!(pieces, ["Meaning: luck"]);
         assert_eq!(calls(&explainer), 1);
+    }
+
+    #[test]
+    fn new_model_gets_its_own_answers() {
+        let explainer = Explainer::new(FakeProvider::answering(&["answer"]), "small");
+        assert_eq!(explain(&explainer, "serendipity").0, Ok(Explained::Fresh));
+        explainer.set_model("big");
+        assert_eq!(explain(&explainer, "serendipity").0, Ok(Explained::Fresh));
+        assert_eq!(calls(&explainer), 2);
+        explainer.set_model("small");
+        assert_eq!(explain(&explainer, "serendipity").0, Ok(Explained::Cached));
     }
 
     #[test]

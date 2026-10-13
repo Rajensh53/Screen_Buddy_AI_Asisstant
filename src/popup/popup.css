@@ -1,13 +1,37 @@
+:root {
+  --card-bg: rgba(255, 255, 255, 0.97);
+  --card-text: #1f2937;
+  --card-border: rgba(0, 0, 0, 0.08);
+  --muted: #6b7280;
+  --error: #b45309;
+  --button-bg: rgba(0, 0, 0, 0.05);
+  --button-hover: rgba(0, 0, 0, 0.1);
+  --accent: #059669;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --card-bg: rgba(32, 33, 36, 0.97);
+    --card-text: #e5e7eb;
+    --card-border: rgba(255, 255, 255, 0.1);
+    --muted: #9ca3af;
+    --error: #fbbf24;
+    --button-bg: rgba(255, 255, 255, 0.08);
+    --button-hover: rgba(255, 255, 255, 0.15);
+    --accent: #34d399;
+  }
+}
+
 .popup {
   margin: 6px;
   /* The card fills the window. Rust sizes the window to the content, up to a maximum;
      beyond that the card scrolls inside. */
   height: calc(100vh - 12px);
-  padding: 10px 14px 12px;
+  padding: 8px 12px 12px 14px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.97);
-  color: #1f2937;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: var(--card-bg);
+  color: var(--card-text);
+  border: 1px solid var(--card-border);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
   overflow-y: auto;
   font-size: 14px;
@@ -35,20 +59,69 @@
   }
 }
 
+/* Title, then Copy and ×. */
+.popup__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .popup__title {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   font-weight: 600;
-  color: #6b7280;
-  margin-bottom: 6px;
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* A notice's title is the message itself, so it reads like a heading. */
+.popup__title--notice {
+  font-size: 14px;
+  color: var(--card-text);
+  white-space: normal;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.popup__icon-button {
+  flex: none;
+  padding: 1px 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--button-bg);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.popup__icon-button:hover {
+  background: var(--button-hover);
+}
+
+.popup__action {
+  margin-top: 8px;
+  padding: 4px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.popup__action:hover {
+  background: var(--button-bg);
+}
+
 .popup__muted {
   margin: 0;
-  color: #6b7280;
-  font-style: italic;
+  color: var(--muted);
 }
 
 .popup__line {
@@ -81,22 +154,5 @@
 
 .popup__error {
   margin: 0;
-  color: #b45309;
-}
-
-@media (prefers-color-scheme: dark) {
-  .popup {
-    background: rgba(32, 33, 36, 0.97);
-    color: #e5e7eb;
-    border-color: rgba(255, 255, 255, 0.1);
-  }
-
-  .popup__title,
-  .popup__muted {
-    color: #9ca3af;
-  }
-
-  .popup__error {
-    color: #fbbf24;
-  }
+  color: var(--error);
 }

@@ -2,12 +2,16 @@
 //! name from the exe's version info ("Google Chrome"). Also finds which process owns
 //! the window under a screen point.
 
-use ::windows::Win32::Foundation::{CloseHandle, POINT};
+use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, WPARAM};
+use ::windows::core::BOOL;
 use ::windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
 use ::windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
-use ::windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, GetWindowThreadProcessId, WindowFromPoint};
+use ::windows::Win32::UI::WindowsAndMessaging::{
+    EnumChildWindows, GA_ROOT, GetAncestor, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
+    SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_NCHITTEST, WindowFromPoint,
+};
 use ::windows::core::{HSTRING, PCWSTR, PWSTR, w};
 
 use super::trigger::Point;
@@ -58,6 +62,94 @@ pub fn process_at(pt: Point) -> Option<u32> {
         GetWindowThreadProcessId(target, Some(&mut pid));
         (pid != 0).then_some(pid)
     }
+}
+
+/// Whether `pt` is on a window's frame rather than its content: the title bar, a border, a
+/// scroll bar, the menu bar or the minimize/maximize/close buttons. Gestures there move or
+/// resize windows; they never select text. Asks the windows themselves, without reading any
+/// text. A window that doesn't answer within 50 ms counts as content.
+///
+/// Apps that draw their own title bar can answer "title bar" (HTCAPTION) for their whole
+/// window and show their content in a child window: Windows Terminal does, with its text in a
+/// `DesktopWindowContentBridge` child that answers HTCLIENT. So a title-bar answer only counts
+/// if no visible child window at that point says it is content.
+///
+/// WM_NCHITTEST: https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-nchittest
+pub fn on_window_frame(pt: Point) -> bool {
+    // SAFETY: plain Win32 query; a null HWND is checked.
+    let hwnd = unsafe { WindowFromPoint(POINT { x: pt.x, y: pt.y }) };
+    if hwnd.is_invalid() {
+        return false;
+    }
+    match hit_test(hwnd, pt) {
+        Some(HTCAPTION) => !content_child_at(hwnd, pt),
+        Some(code) => is_frame_hit(code),
+        None => false,
+    }
+}
+
+const HTCLIENT: isize = 1;
+const HTCAPTION: isize = 2;
+
+/// SendMessageTimeoutW: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessagetimeoutw
+fn hit_test(hwnd: HWND, pt: Point) -> Option<isize> {
+    let mut result = 0usize;
+    // SAFETY: `hwnd` is a window handle (a stale one makes the call fail); `result` outlives it.
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            WM_NCHITTEST,
+            WPARAM(0),
+            LPARAM(point_lparam(pt)),
+            SMTO_ABORTIFHUNG,
+            50,
+            Some(&mut result),
+        )
+    };
+    (sent.0 != 0).then_some(result as isize)
+}
+
+/// Whether a visible child window of `parent` that contains `pt` answers HTCLIENT.
+///
+/// EnumChildWindows: https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumchildwindows
+fn content_child_at(parent: HWND, pt: Point) -> bool {
+    struct Search {
+        pt: Point,
+        found: bool,
+    }
+    unsafe extern "system" fn visit(child: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: `lparam` is the `Search` passed below, alive for the whole enumeration.
+        let search = unsafe { &mut *(lparam.0 as *mut Search) };
+        let mut r = RECT::default();
+        // SAFETY: plain queries on a window handle given by EnumChildWindows.
+        let contains = unsafe { IsWindowVisible(child).as_bool() && GetWindowRect(child, &mut r).is_ok() }
+            && search.pt.x >= r.left
+            && search.pt.x < r.right
+            && search.pt.y >= r.top
+            && search.pt.y < r.bottom;
+        if contains && hit_test(child, search.pt) == Some(HTCLIENT) {
+            search.found = true;
+            return BOOL(0); // stop
+        }
+        BOOL(1)
+    }
+    let mut search = Search { pt, found: false };
+    // SAFETY: `visit` only uses `search` during this call.
+    let _ = unsafe { EnumChildWindows(Some(parent), Some(visit), LPARAM(&raw mut search as isize)) };
+    search.found
+}
+
+/// The screen point packed like `MAKELPARAM(x, y)`: two signed 16-bit halves, so points on a
+/// monitor left of or above the primary one (negative coordinates) survive.
+fn point_lparam(pt: Point) -> isize {
+    let packed = u32::from(pt.x as u16) | (u32::from(pt.y as u16) << 16);
+    packed as i32 as isize
+}
+
+/// Hit-test codes: HTCLIENT (1) is the content. Codes from HTCAPTION (2) up are the frame;
+/// HTNOWHERE (0), HTTRANSPARENT (-1) and HTERROR (-2) are not.
+fn is_frame_hit(code: isize) -> bool {
+    code >= HTCAPTION
 }
 
 /// Full path of the process's executable.
@@ -113,5 +205,29 @@ fn file_description(path: &str) -> Option<String> {
         let text = String::from_utf16_lossy(chars);
         let text = text.trim_end_matches('\0').trim();
         (!text.is_empty()).then(|| text.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_content_is_not_the_frame() {
+        assert!(!is_frame_hit(1)); // HTCLIENT
+        assert!(!is_frame_hit(0)); // HTNOWHERE
+        assert!(!is_frame_hit(-1)); // HTTRANSPARENT
+        assert!(is_frame_hit(2)); // HTCAPTION
+        assert!(is_frame_hit(7)); // HTVSCROLL
+        assert!(is_frame_hit(20)); // HTCLOSE
+    }
+
+    #[test]
+    fn point_is_packed_like_makelparam() {
+        assert_eq!(point_lparam(Point::new(10, 20)), (20 << 16) | 10);
+        // A monitor left of the primary one: x = -100 keeps its sign in the low word.
+        let packed = point_lparam(Point::new(-100, 5)) as u32;
+        assert_eq!(packed & 0xFFFF, u32::from((-100i16) as u16));
+        assert_eq!(packed >> 16, 5);
     }
 }

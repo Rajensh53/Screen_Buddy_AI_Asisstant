@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BUDDY_EVENT, type BuddyEvent } from "../shared/events";
 
@@ -15,6 +16,8 @@ export default function Mascot() {
   const timer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
+    // Paused may be saved from the last run.
+    invoke<boolean>("is_paused").then(setPaused).catch(() => {});
     const unlisten = listen<boolean>("paused-changed", (event) => setPaused(event.payload));
     return () => {
       unlisten.then((stop) => stop());
@@ -38,6 +41,7 @@ export default function Mascot() {
         case "done":
           return show("talking", "idle", DONE_IDLE_MS);
         case "error":
+        case "notice":
         case "cant_read":
           // Kept short and subtle: some apps simply don't expose their text.
           return show("cant_read", "idle", CANT_READ_MS);
@@ -51,9 +55,19 @@ export default function Mascot() {
     };
   }, []);
 
+  // Right-click: Pause/Resume, Settings, Quit (the tray's menu). Left-drag still moves the mascot.
+  const openMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    invoke("show_mascot_menu").catch(() => {});
+  };
+
   return (
     // The whole window is a drag handle; children must carry the attribute too.
-    <div className={`mascot mascot--${state}${paused ? " mascot--paused" : ""}`} data-tauri-drag-region>
+    <div
+      className={`mascot mascot--${state}${paused ? " mascot--paused" : ""}`}
+      data-tauri-drag-region
+      onContextMenu={openMenu}
+    >
       <div className="mascot__body" data-tauri-drag-region>
         <div className="mascot__eyes" data-tauri-drag-region>
           <span className="mascot__eye" data-tauri-drag-region />
