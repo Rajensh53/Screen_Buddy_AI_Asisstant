@@ -1,13 +1,16 @@
-import type { BuddyEvent, Notice } from "../shared/events";
+import type { BuddyEvent, Notice, PopupLook } from "../shared/events";
 
-/** `notice`: a problem shown instead of an answer (see `notice`). */
-export type Status = "thinking" | "streaming" | "done" | "error" | "notice";
+/** `notice`: a problem shown instead of an answer. `greeting`: the startup speech bubble. */
+export type Status = "thinking" | "streaming" | "done" | "error" | "notice" | "greeting";
 
 export interface AnswerView {
   id: number;
   title: string;
   text: string;
   status: Status;
+  look: PopupLook;
+  /** The window has appeared: the bloom animation runs. */
+  shown: boolean;
   error?: string;
   notice?: Notice;
   /** The app to offer "Use the clipboard in {app}" for, while that hasn't been clicked. */
@@ -23,10 +26,24 @@ export function reduce(view: AnswerView | null, event: BuddyEvent): AnswerView |
         title: event.title,
         text: "",
         status: "thinking",
+        look: event.look,
+        shown: false,
         clipboardOffer: event.clipboard_offer ?? undefined,
       };
     case "notice":
-      return { id: event.id, title: event.notice.title, text: "", status: "notice", notice: event.notice };
+      return {
+        id: event.id,
+        title: event.notice.title,
+        text: "",
+        status: "notice",
+        look: event.look,
+        shown: false,
+        notice: event.notice,
+      };
+    case "greeting":
+      return { id: event.id, title: "", text: event.text, status: "greeting", look: event.look, shown: false };
+    case "shown":
+      return view?.id === event.id ? { ...view, shown: true } : view;
     case "chunk":
       return view?.id === event.id ? { ...view, text: view.text + event.text, status: "streaming" } : view;
     case "done":
@@ -36,6 +53,7 @@ export function reduce(view: AnswerView | null, event: BuddyEvent): AnswerView |
     case "hide":
       return null;
     case "cant_read":
+    case "greeting_pending":
       return view;
   }
 }

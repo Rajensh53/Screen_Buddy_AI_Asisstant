@@ -33,19 +33,23 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     # DwmFlush: the mascot's flight waits for each screen refresh, so it moves without stutter.
     "Win32_Graphics_Dwm",
+    # GetUserNameExW: the first name from Windows, for the greeting when none is set.
+    "Win32_Security_Authentication_Identity",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
-    # Clipboard fallback for the PDF viewer (opt-in): clipboard, its memory, and the
-    # registry values that say whether clipboard history or cloud sync is on.
+    # Clipboard fallback (when UI Automation can't read the selection): clipboard, its memory,
+    # and the registry values that say whether clipboard history or cloud sync is on.
     "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Registry",
+    # GetLocalTime: the local hour for the startup greeting.
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Accessibility",
-    # GetDoubleClickTime; for the opt-in PDF clipboard fallback also GetAsyncKeyState and
-    # SendInput (Ctrl+C). No keyboard hook is ever installed.
+    # GetDoubleClickTime; for the clipboard fallback also GetAsyncKeyState and SendInput
+    # (the copy keys). No keyboard hook is ever installed.
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }

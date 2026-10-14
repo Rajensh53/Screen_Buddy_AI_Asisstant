@@ -8,7 +8,7 @@ pub use prompt::clean_input;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use crate::provider::{Provider, ProviderError};
+use crate::provider::{ChatRequest, Provider, ProviderError};
 use cache::LruCache;
 
 /// Answers are short, so this stays well under 1 MB.
@@ -88,6 +88,16 @@ impl<P: Provider> Explainer<P> {
         Ok(Explained::Fresh)
     }
 
+    /// A one-off question to the current model, such as the startup greeting: the given
+    /// temperature and **no cache**, so every answer is new. Returns the whole answer.
+    pub async fn ask(&self, system: &str, user: &str, temperature: f64) -> Result<String, ProviderError> {
+        let model = self.model();
+        let mut answer = String::new();
+        let request = ChatRequest { model: &model, system, user, temperature };
+        self.provider.stream_chat(request, |piece| answer.push_str(piece)).await?;
+        Ok(answer)
+    }
+
     fn cache(&self) -> MutexGuard<'_, LruCache<Key, String>> {
         // A panic while holding the lock cannot leave the cache half-updated, so keep using it.
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
@@ -101,7 +111,6 @@ mod tests {
     use tauri::async_runtime::block_on;
 
     use super::*;
-    use crate::provider::ChatRequest;
 
     /// Answers with fixed pieces (or a fixed error) and records what it was asked.
     struct FakeProvider {
@@ -177,6 +186,15 @@ mod tests {
         assert_eq!(calls(&explainer), 2);
         explainer.set_model("small");
         assert_eq!(explain(&explainer, "serendipity").0, Ok(Explained::Cached));
+    }
+
+    #[test]
+    fn ask_is_never_cached() {
+        let explainer = Explainer::new(FakeProvider::answering(&["Hi ", "Rajnesh"]), "m");
+        assert_eq!(block_on(explainer.ask("system", "greet", 0.9)), Ok("Hi Rajnesh".into()));
+        assert_eq!(block_on(explainer.ask("system", "greet", 0.9)), Ok("Hi Rajnesh".into()));
+        assert_eq!(calls(&explainer), 2);
+        assert_eq!(*explainer.provider.last_user_text.lock().unwrap(), "greet");
     }
 
     #[test]

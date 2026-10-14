@@ -1,11 +1,12 @@
-/* The popup: a dark "glass" card in the robot's colours (navy visor, cyan glow).
-   A real blur of the desktop would need Windows acrylic on the whole window, so the glass is a
-   translucent gradient. The card's size is measured by Popup.tsx: keep its margin (6px) and the
-   card -> content structure. */
+/* The popup: a dark "glass" card in the robot's colours (navy visor, cyan glow), blooming out of
+   the mascot. A real blur of the desktop would need Windows acrylic on the whole window, so the
+   glass is a translucent gradient. The card's size is measured by Popup.tsx: keep the frame's
+   margin (6px) and the card -> content structure. */
 
 :root {
   --card-from: rgba(15, 23, 42, 0.9);
   --card-to: rgba(30, 41, 59, 0.88);
+  --card-edge: rgb(24, 34, 52);
   --card-border: rgba(56, 189, 248, 0.25);
   --text: #e2e8f0;
   --muted: #94a3b8;
@@ -15,11 +16,41 @@
   --button-hover: rgba(148, 163, 184, 0.16);
 }
 
-.popup {
+/* The frame: the card plus its pointer. Invisible until the window has appeared, then it blooms
+   out of the mascot's direction (transform-origin set by Popup.tsx). */
+.popup-frame {
+  position: relative;
   margin: 6px;
   /* The card fills the window. Rust sizes the window to the content, up to a maximum;
      beyond that the card scrolls inside. */
   height: calc(100vh - 12px);
+  opacity: 0;
+}
+
+.popup-frame--shown {
+  opacity: 1;
+  animation: popup-bloom 280ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes popup-bloom {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.popup {
+  /* Above the pointer, so only the pointer's outer half shows. */
+  position: relative;
+  z-index: 1;
+  height: 100%;
   padding: 9px 10px 12px 14px;
   border-radius: 14px;
   background: linear-gradient(160deg, var(--card-from), var(--card-to));
@@ -35,20 +66,80 @@
   scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
 }
 
-/* Fade and slide in, once per selection. */
-.popup__enter {
-  animation: popup-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+/* The pointer toward the mascot: a small rotated square on one edge, in the card's colours,
+   inside the frame's 6px margin. A faint cyan glow on that edge links the two. */
+.popup__tail {
+  position: absolute;
+  z-index: 0;
+  width: 10px;
+  height: 10px;
+  background: var(--card-edge);
+  border: 1px solid var(--card-border);
+  transform: rotate(45deg);
 }
 
-@keyframes popup-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+.popup-frame--tail-right .popup__tail {
+  right: -5px;
+  top: clamp(12px, calc(var(--tail-offset) - 11px), calc(100% - 22px));
+  border-left: none;
+  border-bottom: none;
+}
+
+.popup-frame--tail-left .popup__tail {
+  left: -5px;
+  top: clamp(12px, calc(var(--tail-offset) - 11px), calc(100% - 22px));
+  border-right: none;
+  border-top: none;
+}
+
+.popup-frame--tail-bottom .popup__tail {
+  bottom: -5px;
+  left: clamp(14px, calc(var(--tail-offset) - 11px), calc(100% - 24px));
+  border-left: none;
+  border-top: none;
+}
+
+.popup-frame--tail-top .popup__tail {
+  top: -5px;
+  left: clamp(14px, calc(var(--tail-offset) - 11px), calc(100% - 24px));
+  border-right: none;
+  border-bottom: none;
+}
+
+.popup-frame--tail-right .popup {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 4px 12px rgba(2, 6, 23, 0.45),
+    5px 0 14px -6px rgba(56, 189, 248, 0.5);
+}
+
+.popup-frame--tail-left .popup {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 4px 12px rgba(2, 6, 23, 0.45),
+    -5px 0 14px -6px rgba(56, 189, 248, 0.5);
+}
+
+/* The startup greeting: a small white speech bubble. */
+.popup-frame--bubble .popup {
+  padding: 10px 14px;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #0f172a;
+  border-color: rgba(15, 23, 42, 0.08);
+  box-shadow: 0 4px 12px rgba(2, 6, 23, 0.28);
+}
+
+.popup-frame--bubble .popup__tail {
+  background: #ffffff;
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.popup__greeting {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 /* Title (the selected text), then Copy and Close. */
@@ -236,7 +327,7 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .popup__enter,
+  .popup-frame--shown,
   .popup__dots span {
     animation: none;
   }

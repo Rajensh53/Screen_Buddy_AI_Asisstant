@@ -6,6 +6,8 @@ use std::sync::{PoisonError, RwLock};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use ::windows::Win32::Security::Authentication::Identity::{GetUserNameExW, NameDisplay};
+use ::windows::core::PWSTR;
 use tauri_plugin_store::StoreExt;
 
 use crate::AppState;
@@ -23,6 +25,7 @@ pub const SETTINGS_CHANGED: &str = "settings-changed";
 const STORE_FILE: &str = "settings.json";
 const STORE_KEY: &str = "settings";
 const MAX_MODEL_CHARS: usize = 100;
+const MAX_NAME_CHARS: usize = 40;
 
 /// A screen position in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,6 +40,9 @@ pub struct Position {
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub model: String,
+    /// What the mascot calls the user in its greeting. Empty: the first name of the Windows account.
+    /// Sent only to the local model.
+    pub user_name: String,
     /// Exe names whose text is never read.
     pub block_list: Vec<String>,
     pub paused: bool,
@@ -52,6 +58,10 @@ pub struct Settings {
     pub clipboard_first_apps: Vec<String>,
     /// The mascot flies next to the popup while explaining, and back home when it closes.
     pub fly_to_selection: bool,
+    /// A time-of-day greeting next to the mascot when the app starts.
+    pub greeting: bool,
+    /// Every minute or so of quiet the mascot waves, spins, patrols or stretches.
+    pub idle_play: bool,
     /// Where the mascot was left. `None`: the bottom-right corner.
     pub mascot_position: Option<Position>,
 }
@@ -60,12 +70,15 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             model: DEFAULT_MODEL.to_owned(),
+            user_name: String::new(),
             block_list: BlockList::defaults().entries(),
             paused: false,
             history_enabled: false,
             clipboard_fallback: true,
             clipboard_first_apps: Vec::new(),
             fly_to_selection: true,
+            greeting: true,
+            idle_play: true,
             mascot_position: None,
         }
     }
@@ -77,6 +90,7 @@ impl Settings {
     pub fn normalized(mut self) -> Self {
         let model = self.model.trim();
         self.model = if model.is_empty() { DEFAULT_MODEL.to_owned() } else { model.chars().take(MAX_MODEL_CHARS).collect() };
+        self.user_name = self.user_name.trim().chars().take(MAX_NAME_CHARS).collect();
         self.block_list = BlockList::new(&self.block_list).entries();
         self.clipboard_first_apps = BlockList::new(&self.clipboard_first_apps).entries();
         self
@@ -87,6 +101,32 @@ impl Settings {
     pub fn reads_clipboard_first(&self, process_name: &str) -> bool {
         self.clipboard_fallback && BlockList::new(&self.clipboard_first_apps).contains(process_name)
     }
+}
+
+/// The name the mascot greets the user with: the one from the settings, or else the first name of
+/// the Windows account ("Rajnesh Charan" -> "Rajnesh"). Empty if neither is known.
+pub fn greeting_name(settings: &Settings) -> String {
+    if settings.user_name.is_empty() { windows_first_name().unwrap_or_default() } else { settings.user_name.clone() }
+}
+
+/// The first name of the signed-in Windows user, from the account's display name.
+///
+/// GetUserNameExW: https://learn.microsoft.com/en-us/windows/win32/api/secext/nf-secext-getusernameexw
+fn windows_first_name() -> Option<String> {
+    let mut buffer = [0u16; 256];
+    let mut size = buffer.len() as u32;
+    // SAFETY: `buffer` holds `size` UTF-16 units; the call writes at most that and updates `size`.
+    let ok = unsafe { GetUserNameExW(NameDisplay, Some(PWSTR(buffer.as_mut_ptr())), &mut size) };
+    if !ok {
+        return None;
+    }
+    first_name(&String::from_utf16_lossy(&buffer[..size as usize]))
+}
+
+/// The first word of a display name, at most `MAX_NAME_CHARS` characters.
+fn first_name(display_name: &str) -> Option<String> {
+    let first = display_name.split_whitespace().next()?;
+    Some(first.chars().take(MAX_NAME_CHARS).collect())
 }
 
 /// The current settings, shared by the tray, the selection worker and the settings window.
@@ -195,6 +235,30 @@ pub fn save_settings(
     }))
 }
 
+/// What the mascot window needs: whether it is paused, and whether it may play when idle.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MascotSettings {
+    paused: bool,
+    idle_play: bool,
+}
+
+#[tauri::command]
+pub fn mascot_settings(window: WebviewWindow, state: State<'_, SettingsState>) -> Result<MascotSettings, String> {
+    if window.label() != crate::windows::MASCOT {
+        return Err("not allowed from this window".to_owned());
+    }
+    let s = state.get();
+    Ok(MascotSettings { paused: s.paused, idle_play: s.idle_play })
+}
+
+/// The first name from Windows, shown as the hint in the settings' name field.
+#[tauri::command]
+pub fn windows_user_name(window: WebviewWindow) -> Result<Option<String>, String> {
+    only_settings_window(&window)?;
+    Ok(windows_first_name())
+}
+
 /// The built-in block list, for "Restore defaults".
 #[tauri::command]
 pub fn default_block_list(window: WebviewWindow) -> Result<Vec<String>, String> {
@@ -249,7 +313,7 @@ mod tests {
         assert!(s.block_list.contains(&"bitwarden.exe".to_owned()));
         assert!(!s.paused && !s.history_enabled);
         assert!(s.clipboard_fallback);
-        assert!(s.fly_to_selection);
+        assert!(s.fly_to_selection && s.greeting && s.idle_play);
         assert_eq!(s.mascot_position, None);
     }
 
@@ -259,6 +323,22 @@ mod tests {
         assert_eq!(s.model, "llama3.2:1b");
         let s = Settings { model: "   ".into(), ..Settings::default() }.normalized();
         assert_eq!(s.model, DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn user_name_is_trimmed_and_cut() {
+        let s = Settings { user_name: "  Rajnesh  ".into(), ..Settings::default() }.normalized();
+        assert_eq!(s.user_name, "Rajnesh");
+        let s = Settings { user_name: "x".repeat(100), ..Settings::default() }.normalized();
+        assert_eq!(s.user_name.chars().count(), MAX_NAME_CHARS);
+        assert_eq!(Settings::default().user_name, "");
+    }
+
+    #[test]
+    fn first_name_from_the_windows_display_name() {
+        assert_eq!(first_name("Rajnesh Charan"), Some("Rajnesh".into()));
+        assert_eq!(first_name("  Rajnesh  "), Some("Rajnesh".into()));
+        assert_eq!(first_name("   "), None);
     }
 
     #[test]
@@ -306,12 +386,15 @@ mod tests {
         let value = serde_json::to_value(&s).unwrap();
         for key in [
             "model",
+            "userName",
             "blockList",
             "paused",
             "historyEnabled",
             "clipboardFallback",
             "clipboardFirstApps",
             "flyToSelection",
+            "greeting",
+            "idlePlay",
             "mascotPosition",
         ] {
             assert!(value.get(key).is_some(), "missing {key}");

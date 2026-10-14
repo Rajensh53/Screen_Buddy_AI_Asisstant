@@ -2,6 +2,9 @@ import type { MascotState } from "./Mascot";
 
 export type FlightDirection = "left" | "right" | "none";
 
+/** Idle play behaviours (Mascot.tsx). */
+export type Play = "wave" | "spin" | "patrol" | "stretch";
+
 export interface FlightLook {
   flying: boolean;
   direction: FlightDirection;
@@ -11,6 +14,7 @@ interface RobotProps {
   state: MascotState;
   paused: boolean;
   flight: FlightLook;
+  play: Play | null;
 }
 
 /**
@@ -21,13 +25,14 @@ interface RobotProps {
  * Every state's eyes, badges and extras are always in the DOM; `mascot.css` shows the ones for
  * the current state with a short cross-fade, so state changes are smooth.
  */
-export default function Robot({ state, paused, flight }: RobotProps) {
+export default function Robot({ state, paused, flight, play }: RobotProps) {
   const classes = [
     "robot",
     `robot--${state}`,
     paused && "robot--paused",
     flight.flying && "robot--flying",
     flight.flying && flight.direction !== "none" && `robot--bank-${flight.direction}`,
+    play && `robot--play-${play}`,
   ]
     .filter(Boolean)
     .join(" ");
@@ -77,8 +82,10 @@ export default function Robot({ state, paused, flight }: RobotProps) {
           </g>
 
           {/* Antenna */}
-          <line className="robot__line" x1="70" y1="27" x2="70" y2="17" />
-          <circle className="robot__spark" cx="70" cy="14" r="4.5" filter="url(#sb-glow)" />
+          <g className="robot__antenna">
+            <line className="robot__line" x1="70" y1="27" x2="70" y2="17" />
+            <circle className="robot__spark" cx="70" cy="14" r="4.5" filter="url(#sb-glow)" />
+          </g>
 
           {/* Body */}
           <rect className="robot__neck" x="62" y="72" width="16" height="8" rx="3" />
@@ -92,6 +99,11 @@ export default function Robot({ state, paused, flight }: RobotProps) {
           </g>
           <g className="robot__arm robot__arm--right">
             <rect className="robot__shell" x="95" y="83" width="10" height="24" rx="5" transform="rotate(-14 100 85)" />
+          </g>
+          {/* Raised right arm for the wave, swinging from the shoulder */}
+          <g className="robot__wave-arm">
+            <rect className="robot__shell" x="96" y="62" width="10" height="28" rx="5" transform="rotate(25 101 88)" />
+            <circle className="robot__shell" cx="112" cy="63" r="5.5" />
           </g>
 
           {/* Head, tilting from the neck */}

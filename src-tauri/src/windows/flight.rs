@@ -24,6 +24,7 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 use super::MASCOT;
 use super::mascot;
 use super::placement::{Side, Size};
+use crate::flow::Flow;
 use crate::selection::{Point, Rect};
 
 /// Event name for `FlightEvent`, listened to by the mascot window.
@@ -134,11 +135,13 @@ impl Flight {
     }
 
     /// Flies to `target` (the window's top-left corner, physical pixels). Remembers home on the
-    /// first flight away; a flight from one popup to the next keeps the same home.
-    pub fn fly_to(&self, target: Point) {
-        let Some(from) = self.position() else { return };
+    /// first flight away; a flight from one popup to the next keeps the same home. Returns how
+    /// long the flight takes, or `None` if the mascot moves in one step (or not at all).
+    /// On landing, `Flow::mascot_landed` is told, so the popup can bloom out of the mascot.
+    pub fn fly_to(&self, target: Point) -> Option<Duration> {
+        let from = self.position()?;
         lock(&self.home).get_or_insert(from);
-        self.start(from, PhysicalPosition::new(target.x, target.y), false);
+        self.start(from, PhysicalPosition::new(target.x, target.y), false)
     }
 
     /// Flies back home, if away.
@@ -147,7 +150,6 @@ impl Flight {
         let Some(from) = self.position() else { return };
         self.start(from, home, true);
     }
-
     /// The user grabbed the mascot: stop flying. Wherever it is dropped becomes the new home
     /// (saved by `mascot::save_when_moved`).
     pub fn cancel(&self) {
@@ -161,9 +163,12 @@ impl Flight {
         self.app.get_webview_window(MASCOT)?.outer_position().ok()
     }
 
-    fn start(&self, from: PhysicalPosition<i32>, to: PhysicalPosition<i32>, returning: bool) {
+    fn start(&self, from: PhysicalPosition<i32>, to: PhysicalPosition<i32>, returning: bool) -> Option<Duration> {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let Some(hwnd) = self.app.get_webview_window(MASCOT).and_then(|w| w.hwnd().ok()) else { return };
+        let hwnd = self.app.get_webview_window(MASCOT).and_then(|w| w.hwnd().ok())?;
+        let (a, b) = (Point::new(from.x, from.y), Point::new(to.x, to.y));
+        let distance = f64::from(b.x - a.x).hypot(f64::from(b.y - a.y));
+        let duration = (from != to && animations_enabled()).then(|| flight_duration(distance));
         // HWND is not Send; the thread rebuilds it from the raw value.
         let hwnd_raw = hwnd.0 as isize;
         let app = self.app.clone();
@@ -174,10 +179,7 @@ impl Flight {
             let hwnd = HWND(hwnd_raw as *mut _);
             ANIMATING.store(true, Ordering::SeqCst);
 
-            if from != to && animations_enabled() {
-                let (a, b) = (Point::new(from.x, from.y), Point::new(to.x, to.y));
-                let distance = f64::from(b.x - a.x).hypot(f64::from(b.y - a.y));
-                let duration = flight_duration(distance);
+            if let Some(duration) = duration {
                 flight.emit(true, bank(a, b));
                 let start = Instant::now();
                 loop {
@@ -206,11 +208,16 @@ impl Flight {
                     lock(&flight.home).take();
                 }
                 flight.emit(false, Direction::None);
+                if !returning && let Some(flow) = app.try_state::<Flow>() {
+                    flow.mascot_landed();
+                }
             }
         });
         if let Err(err) = spawned {
             log::warn!("[mascot] flight not started: {err}");
+            return None;
         }
+        duration
     }
 
     fn emit(&self, flying: bool, direction: Direction) {

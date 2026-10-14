@@ -71,6 +71,11 @@ body {
   margin-top: 8px;
 }
 
+.settings__label {
+  flex: none;
+  min-width: 78px;
+}
+
 .settings__input {
   flex: 1;
   min-width: 0;

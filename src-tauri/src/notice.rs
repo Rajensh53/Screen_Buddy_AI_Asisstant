@@ -115,6 +115,94 @@ pub fn notice(kind: NoticeKind, cx: Context) -> Notice {
     Notice { kind, title, detail, action }
 }
 
+/// Longest greeting shown; a model that rambles is cut here.
+const MAX_GREETING_CHARS: usize = 120;
+const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/// The part of the day for the local `hour` (0-23).
+pub fn part_of_day(hour: u16) -> &'static str {
+    match hour {
+        5..=11 => "morning",
+        12..=16 => "afternoon",
+        17..=21 => "evening",
+        _ => "night",
+    }
+}
+
+/// The fixed startup greeting, used when the model can't write one in time. `name` may be empty.
+pub fn greeting_for(hour: u16, name: &str) -> String {
+    let name = name.trim();
+    let to = |s: &str| if name.is_empty() { s.to_owned() } else { format!("{s}, {name}") };
+    match part_of_day(hour) {
+        "morning" => format!("{}! ☀️ Ready to help!", to("Good morning")),
+        "afternoon" => format!("{}! 🌤️ How can I help today?", to("Good afternoon")),
+        "evening" => format!("{}! 🌆 Ready whenever you are!", to("Good evening")),
+        _ => format!("{}? 🌙 I'm here for you!", to("Working late")),
+    }
+}
+
+/// A different mood each launch, so the model doesn't settle into one stock greeting.
+pub const GREETING_MOODS: [&str; 8] =
+    ["playful", "cosy", "energetic", "curious", "witty", "gentle", "adventurous", "sunny"];
+
+/// The system prompt and user message asking the model for a fresh greeting. Only the name,
+/// the weekday and the part of the day are sent, to the local model. `weekday`: 0 = Sunday.
+/// `mood`: an index into `GREETING_MOODS` (any number; it wraps around).
+pub fn greeting_prompt(name: &str, hour: u16, weekday: u16, mood: usize) -> (String, String) {
+    let system = "You are Screen Buddy, a cute, cheerful little robot that lives on the user's screen and \
+                  explains words. Write one short greeting, at most 22 words, with exactly one fitting emoji. \
+                  It must start with the user's name when you are given one, greet them for the time of day, \
+                  and end by offering your help in fresh words. Never reuse a stock phrase: make every \
+                  greeting and every offer of help unique. Reply with the greeting only, no quotes."
+        .to_owned();
+    let day = WEEKDAYS.get(usize::from(weekday)).copied().unwrap_or("today");
+    let mood = GREETING_MOODS[mood % GREETING_MOODS.len()];
+    let when = format!("It is {day} {}. Mood: {mood}.", part_of_day(hour));
+    let name = name.trim();
+    let user = if name.is_empty() {
+        format!("The user's name is unknown, so don't use a name. {when}")
+    } else {
+        format!("The user's name is {name}. Start with \"{name}\". {when}")
+    };
+    (system, user)
+}
+
+/// Makes sure the greeting has the user's name: small models sometimes leave it out.
+pub fn ensure_name(greeting: String, name: &str) -> String {
+    let name = name.trim();
+    if name.is_empty() || greeting.to_lowercase().contains(&name.to_lowercase()) {
+        greeting
+    } else {
+        format!("Hey {name}! {greeting}")
+    }
+}
+
+/// The model's greeting, tidied: the first non-empty line, without a "Greeting:" label or
+/// quotes, cut to `MAX_GREETING_CHARS`. `None` if nothing usable is left.
+pub fn clean_greeting(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let line = match line.split_once(':') {
+        Some((label, rest)) if label.trim().eq_ignore_ascii_case("greeting") => rest.trim(),
+        _ => line,
+    };
+    let line = line.trim_matches(|c| matches!(c, '"' | '“' | '”' | '\'' | '*' | '`')).trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(match line.char_indices().nth(MAX_GREETING_CHARS) {
+        Some((cut, _)) => format!("{}…", line[..cut].trim_end()),
+        None => line.to_owned(),
+    })
+}
+
+/// How long the greeting bubble stays: long enough to read, a little longer for longer text.
+pub fn greeting_duration(chars: usize) -> Duration {
+    const BASE_MS: u64 = 3500;
+    const MAX_MS: u64 = 6000;
+    let extra = chars.saturating_sub(40) as u64 * 40;
+    Duration::from_millis((BASE_MS + extra).min(MAX_MS))
+}
+
 /// Remembers when each notice was last shown, per app.
 #[derive(Debug, Default)]
 pub struct NoticeThrottle {
@@ -219,6 +307,79 @@ mod tests {
         assert!(throttle.should_show(NoticeKind::NothingSelected, "Edge", t0));
         assert!(throttle.should_show(NoticeKind::NothingSelected, "Edge", t0 + REPEAT_AFTER));
         assert!(throttle.should_show(NoticeKind::NothingSelected, "Edge", t0 + REPEAT_AFTER * 3));
+    }
+
+    #[test]
+    fn greeting_follows_the_time_of_day() {
+        let morning = "Good morning! ☀️ Ready to help!";
+        let afternoon = "Good afternoon! 🌤️ How can I help today?";
+        let evening = "Good evening! 🌆 Ready whenever you are!";
+        let late = "Working late? 🌙 I'm here for you!";
+        for (hour, expected) in [
+            (0, late),
+            (4, late),
+            (5, morning),
+            (11, morning),
+            (12, afternoon),
+            (16, afternoon),
+            (17, evening),
+            (21, evening),
+            (22, late),
+            (23, late),
+        ] {
+            assert_eq!(greeting_for(hour, ""), expected, "hour {hour}");
+        }
+    }
+
+    #[test]
+    fn fallback_greeting_uses_the_name() {
+        assert_eq!(greeting_for(9, " Rajnesh "), "Good morning, Rajnesh! ☀️ Ready to help!");
+        assert_eq!(greeting_for(23, "Rajnesh"), "Working late, Rajnesh? 🌙 I'm here for you!");
+    }
+
+    #[test]
+    fn greeting_prompt_has_the_name_time_mood_and_help() {
+        let (system, user) = greeting_prompt("Rajnesh", 14, 2, 1);
+        assert!(system.contains("offering your help in fresh words"));
+        assert!(system.contains("must start with the user's name"));
+        assert_eq!(user, "The user's name is Rajnesh. Start with \"Rajnesh\". It is Tuesday afternoon. Mood: cosy.");
+    }
+
+    #[test]
+    fn greeting_prompt_without_a_name_asks_for_none() {
+        let (_, user) = greeting_prompt("  ", 23, 0, 0);
+        assert_eq!(user, "The user's name is unknown, so don't use a name. It is Sunday night. Mood: playful.");
+    }
+
+    #[test]
+    fn mood_wraps_around() {
+        let (_, a) = greeting_prompt("R", 9, 1, 3);
+        let (_, b) = greeting_prompt("R", 9, 1, 3 + GREETING_MOODS.len());
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn name_is_added_when_the_model_leaves_it_out() {
+        assert_eq!(ensure_name("Good morning! ☀️".into(), "Rajnesh"), "Hey Rajnesh! Good morning! ☀️");
+        assert_eq!(ensure_name("rajnesh, good morning!".into(), "Rajnesh"), "rajnesh, good morning!");
+        assert_eq!(ensure_name("Good morning!".into(), ""), "Good morning!");
+    }
+
+    #[test]
+    fn model_greeting_is_tidied() {
+        assert_eq!(clean_greeting("\n  \"Hey Rajnesh! 🌟 Ready to learn?\"  \n"), Some("Hey Rajnesh! 🌟 Ready to learn?".into()));
+        assert_eq!(clean_greeting("Greeting: Hi Rajnesh 👋"), Some("Hi Rajnesh 👋".into()));
+        assert_eq!(clean_greeting("Hello there 😊\nThis second line is dropped."), Some("Hello there 😊".into()));
+        assert_eq!(clean_greeting("  \n\"\"\n"), None);
+        let long = "a".repeat(300);
+        assert_eq!(clean_greeting(&long).unwrap().chars().count(), MAX_GREETING_CHARS + 1);
+    }
+
+    #[test]
+    fn longer_greetings_stay_a_little_longer() {
+        assert_eq!(greeting_duration(20), Duration::from_millis(3500));
+        assert_eq!(greeting_duration(60), Duration::from_millis(4300));
+        assert_eq!(greeting_duration(500), Duration::from_millis(6000));
     }
 
     #[test]

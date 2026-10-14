@@ -14,6 +14,8 @@ pub struct ChatRequest<'a> {
     pub model: &'a str,
     pub system: &'a str,
     pub user: &'a str,
+    /// Low for explanations (steady, factual), higher for the greeting (a new one every time).
+    pub temperature: f64,
 }
 
 pub trait Provider: Send + Sync {

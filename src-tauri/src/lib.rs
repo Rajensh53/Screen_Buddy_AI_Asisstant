@@ -11,7 +11,7 @@ mod windows;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::LevelFilter;
-use tauri::{Manager, RunEvent, State};
+use tauri::{Manager, RunEvent};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind};
 
 use flow::Flow;
@@ -22,12 +22,6 @@ use settings::SettingsState;
 #[derive(Default)]
 pub(crate) struct AppState {
     pub paused: AtomicBool,
-}
-
-/// Whether Screen Buddy is paused, for the mascot to dim itself when it loads.
-#[tauri::command]
-fn is_paused(state: State<'_, AppState>) -> bool {
-    state.paused.load(Ordering::SeqCst)
 }
 
 /// Log file in the app's log folder (`%LOCALAPPDATA%\com.screenbuddy.desktop\logs`), at most
@@ -64,7 +58,7 @@ pub fn run() {
         .manage(AppState::default())
         .on_menu_event(tray::handle_menu_event)
         .invoke_handler(tauri::generate_handler![
-            is_paused,
+            settings::mascot_settings,
             flow::popup_resize,
             flow::popup_close,
             flow::popup_retry,
@@ -76,6 +70,7 @@ pub fn run() {
             settings::get_settings,
             settings::save_settings,
             settings::default_block_list,
+            settings::windows_user_name,
             settings::list_models,
             settings::check_model,
             settings::clipboard_status,
@@ -95,7 +90,12 @@ pub fn run() {
             crate::windows::settings::setup(handle)?;
             // Before the tray and the selection worker, which both use it.
             app.manage(Flow::new(handle.clone(), &settings.model)?);
-            app.state::<Flow>().check_ollama();
+            // The greeting checks Ollama itself once its bubble is gone.
+            if settings.greeting {
+                app.state::<Flow>().greet();
+            } else {
+                app.state::<Flow>().check_ollama();
+            }
             tray::setup(handle, settings.paused)?;
             // The app still runs without selection reading; the user is told why.
             if let Err(err) = selection::start(handle.clone()) {

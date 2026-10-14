@@ -41,6 +41,9 @@ pub const SYSTEM_PROMPT: &str = concat!(
     "No extra text.",
 );
 
+/// Explanations should be steady and factual (project brief).
+const TEMPERATURE: f64 = 0.2;
+
 const OPEN_TAG: &str = "<selected_text>";
 const CLOSE_TAG: &str = "</selected_text>";
 
@@ -87,7 +90,7 @@ pub fn user_message(text: &str) -> String {
 
 /// The request for one explanation. `user` should come from `user_message`.
 pub fn build_request<'a>(model: &'a str, user: &'a str) -> ChatRequest<'a> {
-    ChatRequest { model, system: SYSTEM_PROMPT, user }
+    ChatRequest { model, system: SYSTEM_PROMPT, user, temperature: TEMPERATURE }
 }
 
 #[cfg(test)]

@@ -1,16 +1,18 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { BUDDY_EVENT, type BuddyEvent, type NoticeAction } from "../shared/events";
 import { type AnswerView, parseAnswer, reduce } from "./answer";
 import { CheckIcon, CloseIcon, CopyIcon, RetryIcon } from "./icons";
 
-/** Space around the card (its CSS margin), part of the window size. */
+/** Space around the card (the frame's CSS margin), part of the window size. */
 const OUTER_MARGIN = 12;
 /** After this long without an answer, explain that the model is loading. */
 const SLOW_AFTER_MS = 5000;
 /** How long "Copied ✓" stays. */
 const COPIED_MS = 1500;
+/** If the "shown" event never arrives, the card shows itself after this long anyway. */
+const SHOWN_FALLBACK_MS = 1000;
 
 const ACTION_LABELS: Record<NoticeAction, string> = {
   open_settings: "Open Settings",
@@ -38,6 +40,17 @@ export default function Popup() {
       unlisten.then((stop) => stop());
     };
   }, []);
+
+  // The card blooms when Rust says the window has appeared; never stay invisible if that is missed.
+  const waitingId = view && !view.shown ? view.id : null;
+  useEffect(() => {
+    if (waitingId === null) return;
+    const timer = window.setTimeout(
+      () => setView((current) => (current?.id === waitingId ? { ...current, shown: true } : current)),
+      SHOWN_FALLBACK_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [waitingId]);
 
   // "Loading the model…" when the first piece takes long (the model is loaded on first use).
   const thinkingId = view?.status === "thinking" ? view.id : null;
@@ -68,7 +81,7 @@ export default function Popup() {
       const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
       const borders = card.offsetHeight - card.clientHeight;
       const height = content.offsetHeight + padding + borders + OUTER_MARGIN;
-      const complete = ["done", "error", "notice"].includes(current.status);
+      const complete = ["done", "error", "notice", "greeting"].includes(current.status);
       invoke("popup_resize", { id: current.id, height, complete }).catch(() => {});
     });
   };
@@ -102,92 +115,117 @@ export default function Popup() {
       .catch(() => {});
   };
 
-  const lines = view ? parseAnswer(view.text) : [];
+  const greeting = view?.status === "greeting";
+  const lines = view && !greeting ? parseAnswer(view.text) : [];
+
+  // The frame blooms out of the mascot's direction, with a pointer toward it when it is close.
+  const frameClass = [
+    "popup-frame",
+    greeting && "popup-frame--bubble",
+    view?.shown && "popup-frame--shown",
+    view?.look.tail && `popup-frame--tail-${view.look.tail}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const frameStyle = view
+    ? ({
+        transformOrigin: `${view.look.origin_x * 100}% ${view.look.origin_y * 100}%`,
+        "--tail-offset": `${view.look.tail_offset}px`,
+      } as CSSProperties)
+    : undefined;
 
   return (
-    <div className="popup" ref={cardRef}>
-      <div className="popup__content" ref={contentRef}>
-        {view && (
-          // Keyed by selection, so each new popup fades in once.
-          <div key={view.id} className="popup__enter">
-            <div className="popup__header">
-              <div
-                className={view.status === "notice" ? "popup__title popup__title--notice" : "popup__title"}
-                dir="auto"
-              >
-                {view.title}
-              </div>
-              {view.status === "done" && (
-                <button
-                  type="button"
-                  className={copied ? "popup__icon-button popup__icon-button--done" : "popup__icon-button"}
-                  onClick={copy}
-                  title={copied ? "Copied" : "Copy the answer"}
-                  aria-label={copied ? "Copied" : "Copy the answer"}
+    <div className={frameClass} style={frameStyle}>
+      {view?.look.tail && <span className="popup__tail" aria-hidden="true" />}
+      <div className="popup" ref={cardRef}>
+        <div className="popup__content" ref={contentRef}>
+          {view && greeting && (
+            <p key={view.id} className="popup__greeting">
+              {view.text}
+            </p>
+          )}
+
+          {view && !greeting && (
+            <div key={view.id}>
+              <div className="popup__header">
+                <div
+                  className={view.status === "notice" ? "popup__title popup__title--notice" : "popup__title"}
+                  dir="auto"
                 >
-                  {copied ? <CheckIcon /> : <CopyIcon />}
-                </button>
-              )}
-              <button type="button" className="popup__icon-button" onClick={close} title="Close" aria-label="Close">
-                <CloseIcon />
-              </button>
-            </div>
-
-            {view.status === "thinking" && (
-              <p className="popup__muted popup__thinking">
-                <span className="popup__dots" aria-hidden="true">
-                  <span />
-                  <span />
-                  <span />
-                </span>
-                {slow ? "Loading the model — the first answer can take a few seconds…" : "Thinking…"}
-              </p>
-            )}
-
-            {lines.map((line, i) => (
-              <div key={i} className={line.rtl ? "popup__line popup__line--rtl" : "popup__line"}>
-                {line.label && <span className="popup__label">{line.label}</span>}
-                <span className="popup__value" dir={line.rtl ? "rtl" : "auto"}>
-                  {line.value}
-                </span>
-              </div>
-            ))}
-
-            {view.status === "error" && (
-              <div className="popup__problem">
-                <p className="popup__error">{view.error}</p>
-                <button type="button" className="popup__action" onClick={retry}>
-                  <RetryIcon />
-                  Retry
-                </button>
-              </div>
-            )}
-
-            {view.status === "done" && view.clipboardOffer && (
-              <p className="popup__footer">
-                Wrong text?{" "}
-                <button type="button" className="popup__link" onClick={useClipboard}>
-                  Use the clipboard in {view.clipboardOffer}
-                </button>
-              </p>
-            )}
-
-            {view.status === "notice" && view.notice && (
-              <div className="popup__problem">
-                <p className="popup__muted">{view.notice.detail}</p>
-                {view.notice.action && (
+                  {view.title}
+                </div>
+                {view.status === "done" && (
                   <button
                     type="button"
-                    className="popup__action"
-                    onClick={() => view.notice?.action && runAction(view.notice.action)}
+                    className={copied ? "popup__icon-button popup__icon-button--done" : "popup__icon-button"}
+                    onClick={copy}
+                    title={copied ? "Copied" : "Copy the answer"}
+                    aria-label={copied ? "Copied" : "Copy the answer"}
                   >
-                    {ACTION_LABELS[view.notice.action]}
+                    {copied ? <CheckIcon /> : <CopyIcon />}
                   </button>
                 )}
+                <button type="button" className="popup__icon-button" onClick={close} title="Close" aria-label="Close">
+                  <CloseIcon />
+                </button>
               </div>
-            )}
-          </div>
-        )}
+
+              {view.status === "thinking" && (
+                <p className="popup__muted popup__thinking">
+                  <span className="popup__dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                  {slow ? "Loading the model — the first answer can take a few seconds…" : "Thinking…"}
+                </p>
+              )}
+
+              {lines.map((line, i) => (
+                <div key={i} className={line.rtl ? "popup__line popup__line--rtl" : "popup__line"}>
+                  {line.label && <span className="popup__label">{line.label}</span>}
+                  <span className="popup__value" dir={line.rtl ? "rtl" : "auto"}>
+                    {line.value}
+                  </span>
+                </div>
+              ))}
+
+              {view.status === "error" && (
+                <div className="popup__problem">
+                  <p className="popup__error">{view.error}</p>
+                  <button type="button" className="popup__action" onClick={retry}>
+                    <RetryIcon />
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {view.status === "done" && view.clipboardOffer && (
+                <p className="popup__footer">
+                  Wrong text?{" "}
+                  <button type="button" className="popup__link" onClick={useClipboard}>
+                    Use the clipboard in {view.clipboardOffer}
+                  </button>
+                </p>
+              )}
+
+              {view.status === "notice" && view.notice && (
+                <div className="popup__problem">
+                  <p className="popup__muted">{view.notice.detail}</p>
+                  {view.notice.action && (
+                    <button
+                      type="button"
+                      className="popup__action"
+                      onClick={() => view.notice?.action && runAction(view.notice.action)}
+                    >
+                      {ACTION_LABELS[view.notice.action]}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

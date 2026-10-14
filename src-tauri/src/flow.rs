@@ -8,10 +8,11 @@
 //! cancels the running answer.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use ::windows::Win32::System::SystemInformation::GetLocalTime;
 use serde::Serialize;
 use tauri::async_runtime::{self, JoinHandle};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
@@ -21,7 +22,7 @@ use crate::notice::{self, Context, Notice, NoticeKind, NoticeThrottle};
 use crate::provider::ProviderError;
 use crate::provider::ollama::OllamaProvider;
 use crate::selection::{Point, Rect, SelectionEvent, clipboard, prepare_text};
-use crate::settings::SettingsState;
+use crate::settings::{self, SettingsState};
 use crate::windows::flight::{self, Flight};
 use crate::windows::placement::{self, HeightLimits, Side, Size};
 use crate::windows::{self as app_windows, POPUP, mascot, popup};
@@ -38,11 +39,27 @@ const POPUP_MAX_HEIGHT: f64 = 320.0;
 const POPUP_HEIGHT_STEP: f64 = 48.0;
 /// The selected text shown as the popup's title is cut to this many characters.
 const TITLE_CHARS: usize = 80;
+/// The startup greeting bubble is narrower than an answer.
+const BUBBLE_WIDTH: f64 = 260.0;
 /// The popup is shown once it has rendered the new selection and reported its size, so it
 /// never flashes the previous answer or jumps in size. This is the fallback if no report comes.
 const SHOW_FALLBACK: Duration = Duration::from_millis(250);
-/// Startup notices wait until the windows have loaded and listen for events.
+/// While the mascot flies to the popup, the popup waits for it to land; this much longer than
+/// the flight at most.
+const LANDING_GRACE: Duration = Duration::from_millis(150);
+/// Startup notices wait until the windows have loaded and listen for events, and, when the
+/// greeting is on, a little longer, so they rarely cut it short.
 const STARTUP_NOTICE_DELAY: Duration = Duration::from_secs(3);
+const STARTUP_NOTICE_DELAY_AFTER_GREETING: Duration = Duration::from_millis(5500);
+/// The greeting appears once the windows have loaded, and stays this long.
+const GREETING_DELAY: Duration = Duration::from_millis(1500);
+/// How long the greeting waits for the model to write it.
+const GREETING_WAIT: Duration = Duration::from_secs(6);
+/// A new greeting every time: much livelier than the explanations.
+const GREETING_TEMPERATURE: f64 = 0.9;
+/// How far (physical pixels) the mascot window may be from the popup's edge for the popup to
+/// show a pointer toward it.
+const TAIL_REACH: i32 = 32;
 
 /// What the windows are told. Serialized as `{ "kind": "start", ... }`; mirrored in
 /// `src/shared/events.ts`.
@@ -50,15 +67,90 @@ const STARTUP_NOTICE_DELAY: Duration = Duration::from_secs(3);
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BuddyEvent {
     /// `clipboard_offer`: the app's name if the popup should offer "Wrong text? Use the clipboard
-    /// in {app}" (see `clipboard_offer`).
-    Start { id: u64, title: String, clipboard_offer: Option<String> },
+    /// in {app}" (see `clipboard_offer`). `look`: how the popup comes out of the mascot.
+    Start { id: u64, title: String, clipboard_offer: Option<String>, look: PopupLook },
     Chunk { id: u64, text: String },
     Done { id: u64, cached: bool },
     Error { id: u64, message: String },
     /// A problem shown in the popup instead of an answer.
-    Notice { id: u64, notice: Notice },
+    Notice { id: u64, notice: Notice, look: PopupLook },
+    /// The model is writing the startup greeting (the mascot thinks).
+    GreetingPending,
+    /// The startup greeting, shown as a speech bubble next to the mascot.
+    Greeting { id: u64, text: String, look: PopupLook },
+    /// The popup window has just appeared: its bloom animation starts now.
+    Shown { id: u64 },
     CantRead,
     Hide,
+}
+
+/// How the popup comes out of the mascot: it scales up from the mascot's direction
+/// (`origin_*`, fractions of the popup, used as the CSS transform-origin), and when the mascot is
+/// right next to it, a speech-balloon pointer on that `tail` side, `tail_offset` CSS pixels along
+/// that edge (from the top for left/right, from the left for top/bottom).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct PopupLook {
+    pub origin_x: f64,
+    pub origin_y: f64,
+    pub tail: Option<TailSide>,
+    pub tail_offset: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TailSide {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// The look of a popup at `popup` for a mascot window at `mascot` (both physical pixels).
+pub fn popup_look(popup: Rect, mascot: Option<Rect>, scale: f64) -> PopupLook {
+    let Some(m) = mascot.filter(|_| popup.width() > 0 && popup.height() > 0) else {
+        return PopupLook { origin_x: 0.5, origin_y: 0.5, tail: None, tail_offset: 0.0 };
+    };
+    let center_x = f64::from(m.left + m.right) / 2.0;
+    // The robot's head sits in the upper part of its window: the pointer aims there.
+    let head_y = f64::from(m.top) + f64::from(m.height()) * 0.35;
+    let fraction = |value: f64, start: i32, length: i32| ((value - f64::from(start)) / f64::from(length)).clamp(0.0, 1.0);
+    let css = |physical: f64| physical / scale;
+
+    let rows_overlap = m.top < popup.bottom && popup.top < m.bottom;
+    let columns_overlap = m.left < popup.right && popup.left < m.right;
+    let near = |gap: i32| (0..=TAIL_REACH).contains(&gap);
+    let (tail, tail_offset) = if rows_overlap && near(m.left - popup.right) {
+        (Some(TailSide::Right), css(head_y - f64::from(popup.top)))
+    } else if rows_overlap && near(popup.left - m.right) {
+        (Some(TailSide::Left), css(head_y - f64::from(popup.top)))
+    } else if columns_overlap && near(m.top - popup.bottom) {
+        (Some(TailSide::Bottom), css(center_x - f64::from(popup.left)))
+    } else if columns_overlap && near(popup.top - m.bottom) {
+        (Some(TailSide::Top), css(center_x - f64::from(popup.left)))
+    } else {
+        (None, 0.0)
+    };
+    PopupLook {
+        origin_x: fraction(center_x, popup.left, popup.width()),
+        origin_y: fraction(head_y, popup.top, popup.height()),
+        tail,
+        tail_offset,
+    }
+}
+
+/// A different greeting mood each launch (an index into `notice::GREETING_MOODS`), taken from
+/// the clock, so no random-number crate is needed.
+fn launch_mood() -> usize {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize)
+}
+
+/// The local hour (0-23) and weekday (0 = Sunday), for the greeting.
+///
+/// GetLocalTime: https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getlocaltime
+fn local_time() -> (u16, u16) {
+    // SAFETY: plain query without pointers.
+    let now = unsafe { GetLocalTime() };
+    (now.wHour, now.wDayOfWeek)
 }
 
 /// What a popup is placed next to.
@@ -78,6 +170,8 @@ struct PopupState {
     id: u64,
     /// False until the popup has rendered the new selection (or the fallback fired).
     visible: bool,
+    /// The mascot is flying to the popup: it appears when the mascot lands.
+    wait_for_mascot: bool,
     anchor: Rect,
     work_area: Rect,
     scale: f64,
@@ -117,27 +211,31 @@ impl Flow {
         self.explainer.set_model(model);
     }
 
-    /// Checks at startup that Ollama runs and has the model. If not, a notice next to the
-    /// mascot says what to do, so the first selection doesn't fail without warning.
+    /// Checks at startup that Ollama runs and has the model, after the windows have loaded. If
+    /// not, a notice next to the mascot says what to do, so the first selection doesn't fail
+    /// without warning. (With the greeting on, `greet` runs this check once the bubble is gone.)
     pub fn check_ollama(&self) {
         let app = self.app.clone();
         let spawned = thread::Builder::new().name("ollama-check".into()).spawn(move || {
             thread::sleep(STARTUP_NOTICE_DELAY);
-            let flow = app.state::<Flow>();
-            match async_runtime::block_on(flow.explainer.health()) {
-                Ok(()) => log::info!("[ollama] ready"),
-                Err(err) => {
-                    log::warn!("[ollama] {err}");
-                    if let Some(kind) = ollama_notice(&err) {
-                        let model = flow.explainer.model();
-                        let cx = Context { model: Some(&model), at_startup: true, ..Context::default() };
-                        flow.notify(kind, cx, PopupAnchor::Mascot);
-                    }
-                }
-            }
+            app.state::<Flow>().check_ollama_now();
         });
         if let Err(err) = spawned {
             log::warn!("[ollama] startup check not run: {err}");
+        }
+    }
+
+    fn check_ollama_now(&self) {
+        match async_runtime::block_on(self.explainer.health()) {
+            Ok(()) => log::info!("[ollama] ready"),
+            Err(err) => {
+                log::warn!("[ollama] {err}");
+                if let Some(kind) = ollama_notice(&err) {
+                    let model = self.explainer.model();
+                    let cx = Context { model: Some(&model), at_startup: true, ..Context::default() };
+                    self.notify(kind, cx, PopupAnchor::Mascot);
+                }
+            }
         }
     }
 
@@ -146,8 +244,9 @@ impl Flow {
     pub fn notify_startup(&self, kind: NoticeKind, reason: String) {
         log::error!("[startup] {kind:?}: {reason}");
         let app = self.app.clone();
+        let delay = self.startup_notice_delay();
         let _ = thread::Builder::new().name("startup-notice".into()).spawn(move || {
-            thread::sleep(STARTUP_NOTICE_DELAY);
+            thread::sleep(delay);
             let cx = Context { reason: Some(&reason), at_startup: true, ..Context::default() };
             app.state::<Flow>().notify(kind, cx, PopupAnchor::Mascot);
         });
@@ -166,8 +265,63 @@ impl Flow {
         // Notices are shown with the mascot at home, where it reacts to them.
         self.app.state::<Flight>().return_home();
         let id = self.next_id();
-        self.open_popup(id, anchor);
-        emit(&self.app, BuddyEvent::Notice { id, notice: notice::notice(kind, cx) });
+        self.open_popup(id, anchor, POPUP_WIDTH);
+        let look = self.look(mascot::bounds(&self.app));
+        emit(&self.app, BuddyEvent::Notice { id, notice: notice::notice(kind, cx), look });
+    }
+
+    /// The startup greeting: the local model writes a new one each time, with the user's name,
+    /// shown as a speech bubble next to the mascot. If the model can't answer within
+    /// `GREETING_WAIT` (Ollama not running, a cold start), a fixed greeting is shown instead; the
+    /// request still loads the model, so the first real answer is fast. Only the name and the time
+    /// of day are sent, to the local model. The popup never takes focus.
+    /// Then the Ollama startup check runs, so its notice never cuts the greeting short.
+    pub fn greet(&self) {
+        let app = self.app.clone();
+        let _ = thread::Builder::new().name("greeting".into()).spawn(move || {
+            thread::sleep(GREETING_DELAY);
+            let flow = app.state::<Flow>();
+            // The name from the settings, or else the Windows account's first name.
+            let name = settings::greeting_name(&app.state::<SettingsState>().get());
+            let (hour, weekday) = local_time();
+
+            emit(&app, BuddyEvent::GreetingPending); // The mascot thinks while the model writes.
+            let (system, user) = notice::greeting_prompt(&name, hour, weekday, launch_mood());
+            let (tx, rx) = mpsc::channel();
+            let explainer = Arc::clone(&flow.explainer);
+            async_runtime::spawn(async move {
+                let _ = tx.send(explainer.ask(&system, &user, GREETING_TEMPERATURE).await);
+            });
+            let written = match rx.recv_timeout(GREETING_WAIT) {
+                Ok(Ok(text)) => notice::clean_greeting(&text).map(|g| notice::ensure_name(g, &name)),
+                Ok(Err(err)) => {
+                    log::info!("[greeting] the model couldn't write one: {err}");
+                    None
+                }
+                Err(_) => {
+                    log::info!("[greeting] the model is still loading; using the fixed greeting");
+                    None
+                }
+            };
+            let text = written.unwrap_or_else(|| notice::greeting_for(hour, &name));
+
+            // A selection made meanwhile wins; no bubble then.
+            if !flow.popup_visible() {
+                let id = flow.next_id();
+                flow.open_popup(id, PopupAnchor::Mascot, BUBBLE_WIDTH);
+                let look = flow.look(mascot::bounds(&app));
+                let shown_for = notice::greeting_duration(text.chars().count());
+                emit(&app, BuddyEvent::Greeting { id, text, look });
+                thread::sleep(shown_for);
+                flow.hide_if(id);
+            }
+            flow.check_ollama_now();
+        });
+    }
+
+    /// The mascot landed next to the popup: the popup appears now, as if out of the mascot.
+    pub fn mascot_landed(&self) {
+        self.stop_waiting_for_mascot(None);
     }
 
     /// A new selection: cancel the old answer, show the popup and stream the new answer.
@@ -179,18 +333,22 @@ impl Flow {
         self.cancel_answer();
         *lock(&self.last_selection) = Some((event.clone(), pointer));
         let id = self.next_id();
-        self.open_popup(id, PopupAnchor::Selection { rect: event.rect, pointer });
+        self.open_popup(id, PopupAnchor::Selection { rect: event.rect, pointer }, POPUP_WIDTH);
         let settings = self.app.state::<SettingsState>().get();
-        if settings.fly_to_selection {
-            self.fly_mascot_beside_popup();
+        // The mascot flies beside the popup, and the popup waits to come out of it on landing.
+        let flight = if settings.fly_to_selection { self.fly_mascot_beside_popup() } else { None };
+        if let Some((_, Some(duration))) = flight {
+            self.wait_for_mascot(id, duration);
         }
+        let mascot_at = flight.map(|(rect, _)| rect).or_else(|| mascot::bounds(&self.app));
+        let look = self.look(mascot_at);
         let offer = clipboard_offer(
             &event,
             settings.clipboard_fallback,
             clipboard::policy().cloud_sync,
             settings.reads_clipboard_first(&event.process_name),
         );
-        emit(&self.app, BuddyEvent::Start { id, title: title_for(&event.text), clipboard_offer: offer });
+        emit(&self.app, BuddyEvent::Start { id, title: title_for(&event.text), clipboard_offer: offer, look });
 
         let app = self.app.clone();
         let explainer = Arc::clone(&self.explainer);
@@ -271,14 +429,66 @@ impl Flow {
         }
     }
 
-    /// Flies the mascot next to the popup just placed, if there is room beside it.
-    fn fly_mascot_beside_popup(&self) {
-        let Some(popup) = *lock(&self.popup) else { return };
-        let Some(mascot) = mascot::bounds(&self.app) else { return };
+    /// Flies the mascot next to the popup just placed, if there is room beside it. Returns where
+    /// the mascot will be, and how long the flight takes (`None` if it moves in one step).
+    fn fly_mascot_beside_popup(&self) -> Option<(Rect, Option<Duration>)> {
+        let popup = (*lock(&self.popup))?;
+        let mascot = mascot::bounds(&self.app)?;
         let size = Size { width: mascot.width(), height: mascot.height() };
-        if let Some(target) = flight::dock_position(popup.bounds, popup.side, size, popup.work_area) {
-            self.app.state::<Flight>().fly_to(target);
+        let target = flight::dock_position(popup.bounds, popup.side, size, popup.work_area)?;
+        let duration = self.app.state::<Flight>().fly_to(target);
+        let rect = Rect { left: target.x, top: target.y, right: target.x + size.width, bottom: target.y + size.height };
+        Some((rect, duration))
+    }
+
+    /// How the current popup comes out of a mascot at `mascot`.
+    fn look(&self, mascot: Option<Rect>) -> PopupLook {
+        match *lock(&self.popup) {
+            Some(popup) => popup_look(popup.bounds, mascot, popup.scale),
+            None => popup_look(Rect { left: 0, top: 0, right: 0, bottom: 0 }, None, 1.0),
         }
+    }
+
+    /// The popup of `id` appears when the mascot lands, at the latest `duration` + `LANDING_GRACE`.
+    fn wait_for_mascot(&self, id: u64, duration: Duration) {
+        if let Some(state) = lock(&self.popup).as_mut().filter(|s| s.id == id) {
+            state.wait_for_mascot = true;
+        }
+        let app = self.app.clone();
+        thread::spawn(move || {
+            thread::sleep(duration + LANDING_GRACE);
+            app.state::<Flow>().stop_waiting_for_mascot(Some(id));
+        });
+    }
+
+    /// Shows the popup that waited for the mascot (`id`: only if it is still that popup).
+    fn stop_waiting_for_mascot(&self, id: Option<u64>) {
+        let waiting = {
+            let mut guard = lock(&self.popup);
+            match guard.as_mut() {
+                Some(state) if state.wait_for_mascot && id.is_none_or(|id| id == state.id) => {
+                    state.wait_for_mascot = false;
+                    Some(state.id)
+                }
+                _ => None,
+            }
+        };
+        if let Some(id) = waiting {
+            self.update_popup(id, None, false);
+        }
+    }
+
+    /// Hides the popup if it is still `id` (the greeting, after its few seconds).
+    fn hide_if(&self, id: u64) {
+        let current = lock(&self.popup).is_some_and(|s| s.id == id);
+        if current {
+            self.hide();
+        }
+    }
+
+    fn startup_notice_delay(&self) -> Duration {
+        let greeting = self.app.state::<SettingsState>().get().greeting;
+        if greeting { STARTUP_NOTICE_DELAY_AFTER_GREETING } else { STARTUP_NOTICE_DELAY }
     }
 
     fn next_id(&self) -> u64 {
@@ -286,8 +496,9 @@ impl Flow {
     }
 
     /// Places the popup for `id` and makes sure it shows, even if the page never reports its size.
-    fn open_popup(&self, id: u64, anchor: PopupAnchor) {
-        self.prepare_popup(id, anchor);
+    /// `width` in CSS pixels.
+    fn open_popup(&self, id: u64, anchor: PopupAnchor, width: f64) {
+        self.prepare_popup(id, anchor, width);
         let app = self.app.clone();
         thread::spawn(move || {
             thread::sleep(SHOW_FALLBACK);
@@ -318,20 +529,28 @@ impl Flow {
                     resized = true;
                 }
             }
-            let show = !state.visible;
+            // A popup that waits for the mascot to land is placed but not shown yet.
+            let show = !state.visible && !state.wait_for_mascot;
             if !show && !resized {
                 return;
             }
-            state.visible = true;
+            state.visible |= show;
             (state.bounds, show)
         };
+        let app = self.app.clone();
         run_on_popup(&self.app, move |window| {
-            if show { popup::show_at(window, bounds) } else { popup::set_bounds(window, bounds) }
+            if show {
+                popup::show_at(window, bounds)?;
+                emit(&app, BuddyEvent::Shown { id });
+                Ok(())
+            } else {
+                popup::set_bounds(window, bounds)
+            }
         });
     }
 
-    /// Places the popup for `id`. It is shown by `update_popup`.
-    fn prepare_popup(&self, id: u64, anchor: PopupAnchor) {
+    /// Places the popup for `id`, `width` CSS pixels wide. It is shown by `update_popup`.
+    fn prepare_popup(&self, id: u64, anchor: PopupAnchor, width: f64) {
         // Next to a selection: below it if possible. Next to the mascot (bottom-right corner
         // by default): above it.
         let (selection, pointer, prefer) = match anchor {
@@ -360,13 +579,14 @@ impl Flow {
         };
         let scale = monitor.scale_factor();
         let size = Size {
-            width: (POPUP_WIDTH * scale).round() as i32,
+            width: (width * scale).round() as i32,
             height: (POPUP_START_HEIGHT * scale).round() as i32,
         };
         let anchor = placement::anchor(selection, pointer, work_area);
         let (bounds, side) = placement::place(anchor, size, work_area, prefer);
 
-        *lock(&self.popup) = Some(PopupState { id, visible: false, anchor, work_area, scale, side, bounds });
+        *lock(&self.popup) =
+            Some(PopupState { id, visible: false, wait_for_mascot: false, anchor, work_area, scale, side, bounds });
     }
 
     fn cancel_answer(&self) {
@@ -494,13 +714,19 @@ mod tests {
     fn events_have_the_shape_the_frontend_expects() {
         let cases = [
             (
-                BuddyEvent::Start { id: 1, title: "word".into(), clipboard_offer: None },
-                json!({"kind": "start", "id": 1, "title": "word", "clipboard_offer": null}),
+                BuddyEvent::Start { id: 1, title: "word".into(), clipboard_offer: None, look: CENTER },
+                json!({"kind": "start", "id": 1, "title": "word", "clipboard_offer": null, "look": center_json()}),
             ),
             (
-                BuddyEvent::Start { id: 1, title: "word".into(), clipboard_offer: Some("Notepad".into()) },
-                json!({"kind": "start", "id": 1, "title": "word", "clipboard_offer": "Notepad"}),
+                BuddyEvent::Start { id: 1, title: "word".into(), clipboard_offer: Some("Notepad".into()), look: CENTER },
+                json!({"kind": "start", "id": 1, "title": "word", "clipboard_offer": "Notepad", "look": center_json()}),
             ),
+            (
+                BuddyEvent::Greeting { id: 4, text: "Hi".into(), look: CENTER },
+                json!({"kind": "greeting", "id": 4, "text": "Hi", "look": center_json()}),
+            ),
+            (BuddyEvent::Shown { id: 4 }, json!({"kind": "shown", "id": 4})),
+            (BuddyEvent::GreetingPending, json!({"kind": "greeting_pending"})),
             (BuddyEvent::Chunk { id: 1, text: "Hi".into() }, json!({"kind": "chunk", "id": 1, "text": "Hi"})),
             (BuddyEvent::Done { id: 1, cached: true }, json!({"kind": "done", "id": 1, "cached": true})),
             (BuddyEvent::Error { id: 2, message: "m".into() }, json!({"kind": "error", "id": 2, "message": "m"})),
@@ -515,7 +741,7 @@ mod tests {
     #[test]
     fn notice_event_shape() {
         let notice = notice::notice(NoticeKind::PasswordField, Context::default());
-        let value = serde_json::to_value(BuddyEvent::Notice { id: 3, notice }).unwrap();
+        let value = serde_json::to_value(BuddyEvent::Notice { id: 3, notice, look: CENTER }).unwrap();
         assert_eq!(value["kind"], "notice");
         assert_eq!(value["id"], 3);
         assert_eq!(value["notice"]["kind"], "password_field");
@@ -528,6 +754,57 @@ mod tests {
         assert_eq!(ollama_notice(&ProviderError::NotRunning), Some(NoticeKind::OllamaNotRunning));
         assert_eq!(ollama_notice(&ProviderError::ModelMissing("m".into())), Some(NoticeKind::ModelMissing));
         assert_eq!(ollama_notice(&ProviderError::Timeout), None);
+    }
+
+    const CENTER: PopupLook = PopupLook { origin_x: 0.5, origin_y: 0.5, tail: None, tail_offset: 0.0 };
+    fn center_json() -> serde_json::Value {
+        json!({"origin_x": 0.5, "origin_y": 0.5, "tail": null, "tail_offset": 0.0})
+    }
+
+    /// An answer popup (360x200 at 100%) and the mascot window (140x140).
+    const POPUP: Rect = Rect { left: 300, top: 430, right: 660, bottom: 630 };
+
+    fn mascot_at(left: i32, top: i32) -> Option<Rect> {
+        Some(Rect { left, top, right: left + 140, bottom: top + 140 })
+    }
+
+    #[test]
+    fn mascot_docked_right_gets_a_pointer_on_the_right() {
+        let look = popup_look(POPUP, mascot_at(668, 430), 1.0);
+        assert_eq!(look.tail, Some(TailSide::Right));
+        assert_eq!(look.origin_x, 1.0);
+        assert!((look.tail_offset - 49.0).abs() < 0.01); // the robot's head
+    }
+
+    #[test]
+    fn mascot_docked_left_gets_a_pointer_on_the_left() {
+        let look = popup_look(POPUP, mascot_at(152, 430), 1.0);
+        assert_eq!(look.tail, Some(TailSide::Left));
+        assert_eq!(look.origin_x, 0.0);
+    }
+
+    #[test]
+    fn greeting_above_the_mascot_points_down() {
+        // The bubble is placed 8 px above the mascot.
+        let bubble = Rect { left: 1500, top: 700, right: 1760, bottom: 832 };
+        let look = popup_look(bubble, mascot_at(1600, 840), 1.0);
+        assert_eq!(look.tail, Some(TailSide::Bottom));
+        assert_eq!(look.origin_y, 1.0);
+        assert!((look.tail_offset - 170.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn mascot_far_away_scales_from_its_direction_without_a_pointer() {
+        let look = popup_look(POPUP, mascot_at(1700, 900), 1.0);
+        assert_eq!(look.tail, None);
+        assert_eq!((look.origin_x, look.origin_y), (1.0, 1.0));
+        assert_eq!(popup_look(POPUP, None, 1.0).tail, None);
+    }
+
+    #[test]
+    fn pointer_offset_is_in_css_pixels() {
+        let look = popup_look(POPUP, mascot_at(668, 430), 1.5);
+        assert!((look.tail_offset - 49.0 / 1.5).abs() < 0.01);
     }
 
     fn event(via_clipboard: bool) -> SelectionEvent {

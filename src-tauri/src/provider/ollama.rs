@@ -19,8 +19,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 
-// Model options from the project brief.
-const TEMPERATURE: f64 = 0.2;
+// Model options from the project brief (the temperature comes with each request).
 const KEEP_ALIVE: &str = "30m";
 
 pub struct OllamaProvider {
@@ -135,7 +134,7 @@ impl<'a> ChatBody<'a> {
             stream: true,
             think: false,
             keep_alive: KEEP_ALIVE,
-            options: Options { temperature: TEMPERATURE },
+            options: Options { temperature: req.temperature },
         }
     }
 }
@@ -274,7 +273,7 @@ mod tests {
     const MODEL: &str = "qwen3.5:4b";
 
     fn request() -> ChatRequest<'static> {
-        ChatRequest { model: MODEL, system: "system prompt", user: "serendipity" }
+        ChatRequest { model: MODEL, system: "system prompt", user: "serendipity", temperature: 0.2 }
     }
 
     fn texts(lines: Vec<Vec<u8>>) -> Vec<String> {
@@ -358,6 +357,13 @@ mod tests {
                 "options": {"temperature": 0.2},
             })
         );
+    }
+
+    #[test]
+    fn chat_body_sends_the_request_temperature() {
+        let req = ChatRequest { temperature: 0.9, ..request() };
+        let body = serde_json::to_value(ChatBody::new(req)).unwrap();
+        assert_eq!(body["options"]["temperature"], json!(0.9));
     }
 
     #[test]
