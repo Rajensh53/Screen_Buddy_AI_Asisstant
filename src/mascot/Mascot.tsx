@@ -8,7 +8,7 @@ import { TURN_MS } from "./turn";
 /**
  * Character states, driven by `buddy` events. The last four are short reactions to notices,
  * shown at home (the mascot only flies for answers). Paused, flight, idle play and the hologram
- * glitches are separate.
+ * glitches (only at start and on Quit) are separate.
  */
 export type MascotState =
   | "idle"
@@ -53,8 +53,12 @@ const PLAY_MS: Record<Play, number> = {
 };
 const PLAYS: Play[] = ["wink", "yawn", "glance", "turn", "patrol"];
 
-/** How long each hologram glitch runs (mascot.css). The exit one stays: the app is closing. */
-const GLITCH_MS: Record<Exclude<Glitch, "exit">, number> = { boot: 850, jitter: 180 };
+/** After this long with nothing happening, the endless animations (hover, glow, breathing) pause
+ * where they are: a moving transparent window costs the GPU every frame. Anything wakes it. */
+const REST_AFTER_MS = 20_000;
+
+/** How long the boot glitch runs (mascot.css). The exit one stays: the app is closing. */
+const BOOT_MS = 850;
 /** Sent by the tray's Quit just before the app closes (src-tauri/src/tray.rs). */
 const MASCOT_EXIT = "mascot-exit";
 
@@ -93,7 +97,6 @@ const PREVIEW: Look[] = [
   look("idle", { play: "turn" }),
   look("idle", { play: "patrol" }),
   look("idle", { paused: true }),
-  look("idle", { glitch: "jitter" }),
   look("idle", { glitch: "exit" }),
   look("idle", { glitch: "boot" }),
 ];
@@ -115,6 +118,7 @@ export default function Mascot() {
   // Bumped by anything real (an event, a grab): idle play stops at once and its wait restarts.
   const [activity, setActivity] = useState(0);
   const [preview, setPreview] = useState<Look | null>(null);
+  const [resting, setResting] = useState(false);
   const timer = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -144,22 +148,13 @@ export default function Mascot() {
     };
   }, []);
 
-  // Boot and jitter glitches end by themselves; the exit one stays.
+  // The boot glitch ends by itself; the exit one stays. Glitches only ever run at start and on
+  // Quit, never between states.
   useEffect(() => {
-    if (glitch === null || glitch === "exit") return;
-    const handle = window.setTimeout(() => setGlitch((g) => (g === glitch ? null : g)), GLITCH_MS[glitch]);
+    if (glitch !== "boot") return;
+    const handle = window.setTimeout(() => setGlitch((g) => (g === "boot" ? null : g)), BOOT_MS);
     return () => window.clearTimeout(handle);
   }, [glitch]);
-
-  // A short digital flicker whenever the state changes (not on the first render).
-  const firstState = useRef(true);
-  useEffect(() => {
-    if (firstState.current) {
-      firstState.current = false;
-      return;
-    }
-    setGlitch((g) => g ?? "jitter");
-  }, [state, paused]);
 
   useEffect(() => {
     /** Switches to `now`, then to `next` after `ms`. */
@@ -224,6 +219,15 @@ export default function Mascot() {
     return () => window.clearTimeout(handle);
   }, [state, paused, flight.flying, idlePlay, activity]);
 
+  // Rest after a quiet while; anything real wakes it (and restarts the wait). Idle play doesn't:
+  // after a wink or a turn the robot goes straight back to resting.
+  useEffect(() => {
+    setResting(false);
+    if (state !== "idle" || flight.flying || greeting || glitch) return;
+    const handle = window.setTimeout(() => setResting(true), REST_AFTER_MS);
+    return () => window.clearTimeout(handle);
+  }, [state, paused, flight.flying, greeting, glitch, activity]);
+
   // Debug builds only: cycle through every look once, then back to the real state.
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -266,6 +270,7 @@ export default function Mascot() {
         flight={shown.flight}
         play={shown.play}
         glitch={shown.glitch}
+        resting={!preview && resting}
       />
       {/* Above the drawing (which ignores the mouse): every pixel drags the mascot. Tauri only
           starts a drag on an element that carries the attribute itself. */}

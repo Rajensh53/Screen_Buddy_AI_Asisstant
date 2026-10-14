@@ -43,7 +43,7 @@ focused on meaning and translation only.
 - Settings: `tauri-plugin-store`. History: optional, off by default, local SQLite.
 - Character: an original SVG/CSS floating robot head (no body) with an OLED visor whose LED face
   shows the states (idle, noticed, thinking, talking, cant_read, shy, refuse, warning, offline, paused),
-  idle plays, and hologram glitches at start, on Quit and between states. Styled after the reference
+  idle plays, and hologram glitches only at start and on Quit (user decision 2026-10-14). Styled after the reference
   video in `Muscot Referance/` (style only; nothing copied from it, and it stays out of git).
 
 ## Architecture

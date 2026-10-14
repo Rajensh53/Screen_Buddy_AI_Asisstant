@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { MascotState } from "./Mascot";
 import { PIXELS_404, faceFor } from "./face";
 import { animateTurn } from "./turn";
@@ -8,8 +8,8 @@ export type FlightDirection = "left" | "right" | "none";
 /** Idle play behaviours (Mascot.tsx). `greet` goes with the startup greeting. */
 export type Play = "wink" | "yawn" | "glance" | "turn" | "patrol" | "greet";
 
-/** Hologram glitches: appearing at start, vanishing on Quit, a flicker between states. */
-export type Glitch = "boot" | "exit" | "jitter";
+/** Hologram glitches, only when the app starts and quits: appearing, and vanishing. */
+export type Glitch = "boot" | "exit";
 
 export interface FlightLook {
   flying: boolean;
@@ -22,12 +22,42 @@ interface RobotProps {
   flight: FlightLook;
   play: Play | null;
   glitch: Glitch | null;
+  /** Nothing has happened for a while: the endless animations pause (Mascot.tsx). */
+  resting: boolean;
 }
 
 /** The size of a "404" pixel, and where the digits start (centered in the visor). */
 const PIXEL = 3.4;
 const PIXELS_LEFT = 80 - (11 * PIXEL) / 2;
 const PIXELS_TOP = 65 - (5 * PIXEL) / 2;
+
+/** A blink every 3-6 s (at random, like a person), 180 ms long (mascot.css). A short animation
+ * started from here, not an endless CSS loop: a running animation redraws the window every frame. */
+const BLINK_EVERY_MS: [number, number] = [3000, 6000];
+const BLINK_MS = 180;
+
+/** True during a blink, while `active`. */
+function useBlink(active: boolean): boolean {
+  const [blinking, setBlinking] = useState(false);
+  useEffect(() => {
+    setBlinking(false);
+    if (!active) return;
+    let handle = 0;
+    const next = () => {
+      const wait = BLINK_EVERY_MS[0] + Math.random() * (BLINK_EVERY_MS[1] - BLINK_EVERY_MS[0]);
+      handle = window.setTimeout(() => {
+        setBlinking(true);
+        handle = window.setTimeout(() => {
+          setBlinking(false);
+          next();
+        }, BLINK_MS);
+      }, wait);
+    };
+    next();
+    return () => window.clearTimeout(handle);
+  }, [active]);
+  return blinking;
+}
 
 /** A path shape set through the CSS `d` property, so a change morphs (transition in mascot.css). */
 const shape = (d: string) => ({ d, style: { d: `path("${d}")` } as CSSProperties });
@@ -42,7 +72,22 @@ const shape = (d: string) => ({ d, style: { d: `path("${d}")` } as CSSProperties
  * glitch runs, its hologram copies. The "turn" play is driven frame by frame from `turn.ts`.
  * Every state's features are always in the DOM; `mascot.css` shows the ones for the current state.
  */
-export default function Robot({ state, paused, flight, play, glitch }: RobotProps) {
+export default function Robot({ state, paused, flight, play, glitch, resting }: RobotProps) {
+  // Resting: the hover (or breathing) finishes its round, then stops at its start position.
+  // The patrol play moves the hover layer itself, so it runs even while resting.
+  const hover = useRef<HTMLDivElement>(null);
+  const [settled, setSettled] = useState(false);
+  const rest = resting && play !== "patrol";
+  useEffect(() => {
+    setSettled(false);
+    const el = hover.current;
+    if (!rest || !el) return;
+    const settle = (e: AnimationEvent) => e.target === el && setSettled(true);
+    el.addEventListener("animationiteration", settle);
+    return () => el.removeEventListener("animationiteration", settle);
+  }, [rest]);
+
+  const blinking = useBlink(state === "idle" && !paused && !play && !glitch);
   const classes = [
     "robot",
     `robot--${state}`,
@@ -51,6 +96,8 @@ export default function Robot({ state, paused, flight, play, glitch }: RobotProp
     flight.flying && flight.direction !== "none" && `robot--bank-${flight.direction}`,
     play && `robot--play-${play}`,
     glitch && `robot--glitch-${glitch}`,
+    blinking && "robot--blink",
+    settled && "robot--settled",
   ]
     .filter(Boolean)
     .join(" ");
@@ -66,7 +113,7 @@ export default function Robot({ state, paused, flight, play, glitch }: RobotProp
   return (
     <div ref={root} className={classes} role="img" aria-label="Screen Buddy">
       <div className="robot__pool" />
-      <div className="robot__hover">
+      <div ref={hover} className="robot__hover">
         <div className="robot__bank">
           <svg className="robot__svg" viewBox="0 0 160 150">
             <defs>

@@ -43,8 +43,28 @@ fn log_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     builder.build()
 }
 
+/// Writes a crash to the log file before the app stops: release builds abort on a panic and have no
+/// console, so it would leave no trace otherwise. Release builds log only where it happened (file,
+/// line, thread): a panic message can quote a string's contents, which may be selected text.
+fn log_panics() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let thread = thread.name().unwrap_or("unnamed");
+        let at = info.location().map_or_else(|| "unknown place".to_owned(), |l| format!("{}:{}", l.file(), l.line()));
+        if cfg!(debug_assertions) {
+            log::error!("[crash] thread '{thread}' panicked at {at}: {info}");
+        } else {
+            log::error!("[crash] thread '{thread}' panicked at {at}");
+        }
+        log::logger().flush();
+        default_hook(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    log_panics();
     let app = tauri::Builder::default()
         // First, as the plugin requires: a second launch opens Settings in this one instead of
         // starting a second app with a second mouse hook.

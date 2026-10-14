@@ -17,3 +17,6 @@ dist
 # Python spike caches
 __pycache__/
 *.pyc
+
+# Style references for the mascot (stock renders and a video; never shipped)
+Muscot Referance/

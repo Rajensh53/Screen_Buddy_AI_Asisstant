@@ -38,6 +38,13 @@
 
 /* --- Layers --- */
 
+/* The animations that run all the time (hover, glow, paused breathing) are sampled from a sine
+   curve into 8 keyframes and move in steps of about 11 frames a second: every frame of a moving
+   transparent window costs the GPU, and these moves are a few pixels, so the steps don't show.
+   Measured idle cost (WebView2 GPU + renderer, one core = 100%): about 42% with smooth 60 fps
+   loops and a blurred glow; about 10% with these steps; about 2% once the robot rests, when the
+   loops stop (Mascot.tsx, Robot.tsx). Blinks are short animations started from Robot.tsx. */
+
 /* The glow on the "desk": stays put, smaller and dimmer while the head rises. */
 .robot__pool {
   position: absolute;
@@ -47,14 +54,15 @@
   height: 16px;
   margin-left: -48px;
   border-radius: 50%;
+  /* Soft by its gradient alone: a blur filter here costs a lot (redrawn every step). */
   background: radial-gradient(
     ellipse at center,
-    rgba(62, 230, 255, 0.55),
-    rgba(43, 140, 255, 0.22) 45%,
+    rgba(62, 230, 255, 0.5),
+    rgba(43, 140, 255, 0.2) 40%,
+    rgba(43, 140, 255, 0.06) 58%,
     transparent 72%
   );
-  filter: blur(2px);
-  animation: robot-pool 3.6s ease-in-out infinite;
+  animation: robot-pool 3.6s steps(4) infinite;
   transition:
     opacity 300ms ease,
     transform 300ms ease;
@@ -64,7 +72,7 @@
 .robot__hover {
   position: absolute;
   inset: 0;
-  animation: robot-hover 3.6s ease-in-out infinite;
+  animation: robot-hover 3.6s steps(4) infinite;
   will-change: transform;
 }
 
@@ -285,9 +293,9 @@
 
 /* --- States --- */
 
-/* idle: relaxed eyes that blink now and then */
-.robot--idle .led__eyes {
-  animation: robot-blink 5.2s infinite;
+/* idle: relaxed eyes that blink now and then (started from Robot.tsx) */
+.robot--blink .led__eyes {
+  animation: robot-blink 180ms ease-in-out;
 }
 
 /* noticed: the eyes widen, a radar sweep crosses the screen, then a glowing "!" */
@@ -359,10 +367,10 @@
   opacity: 0.35;
 }
 
-/* can't read: a glitching "404" */
+/* can't read: a red "404" that pulses */
 .robot--cant_read .led__404 {
   opacity: 1;
-  animation: robot-404 1.4s steps(1, end) infinite;
+  animation: robot-pulse 1.2s ease-in-out infinite;
 }
 
 /* refuse (blocked app): a red "X" pops up */
@@ -403,7 +411,7 @@
 }
 
 .robot--paused .led__z {
-  animation: robot-z 3s ease-in-out infinite;
+  animation: robot-z 3s steps(8) infinite;
 }
 
 .robot--paused .led__z--2 {
@@ -411,7 +419,7 @@
 }
 
 .robot--paused .robot__hover {
-  animation: robot-breathe 5.5s ease-in-out infinite;
+  animation: robot-breathe 5.5s steps(8) infinite;
 }
 
 .robot--paused .robot__cone {
@@ -450,6 +458,14 @@
 
 .robot--play-greet .robot__hover {
   animation: robot-greet 0.9s ease-in-out 2;
+}
+
+/* rest: after a quiet while the endless loops stop at the end of their current round, back at
+   their start position, so nothing jumps (Robot.tsx). Removing them costs less than pausing. */
+.robot--settled .robot__hover,
+.robot--settled .robot__pool,
+.robot--settled .led__z {
+  animation: none;
 }
 
 /* turn: driven from turn.ts, which moves the glow too */
@@ -553,50 +569,83 @@
   animation: robot-beam 650ms ease-out forwards;
 }
 
-/* jitter: a short digital flicker when the state changes */
-.robot--glitch-jitter .glitch--red {
-  animation: robot-jitter-red 180ms steps(1, end) both;
-}
-
-.robot--glitch-jitter .glitch--cyan {
-  animation: robot-jitter-cyan 180ms steps(1, end) both;
-}
-
-.robot--glitch-jitter .glitch__scan {
-  animation: robot-scan-pulse 180ms ease-out both;
-}
-
 /* --- Keyframes --- */
 
 @keyframes robot-hover {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0);
+  0% {
+    transform: translate3d(0, -0px, 0);
+  }
+  12.5% {
+    transform: translate3d(0, -0.732px, 0);
+  }
+  25% {
+    transform: translate3d(0, -2.5px, 0);
+  }
+  37.5% {
+    transform: translate3d(0, -4.268px, 0);
   }
   50% {
     transform: translate3d(0, -5px, 0);
   }
+  62.5% {
+    transform: translate3d(0, -4.268px, 0);
+  }
+  75% {
+    transform: translate3d(0, -2.5px, 0);
+  }
+  87.5% {
+    transform: translate3d(0, -0.732px, 0);
+  }
+  100% {
+    transform: translate3d(0, -0px, 0);
+  }
 }
 
 @keyframes robot-pool {
-  0%,
-  100% {
+  0% {
     transform: scale(1);
     opacity: 1;
+  }
+  12.5% {
+    transform: scale(0.974);
+    opacity: 0.956;
+  }
+  25% {
+    transform: scale(0.91);
+    opacity: 0.85;
+  }
+  37.5% {
+    transform: scale(0.846);
+    opacity: 0.744;
   }
   50% {
     transform: scale(0.82);
     opacity: 0.7;
   }
+  62.5% {
+    transform: scale(0.846);
+    opacity: 0.744;
+  }
+  75% {
+    transform: scale(0.91);
+    opacity: 0.85;
+  }
+  87.5% {
+    transform: scale(0.974);
+    opacity: 0.956;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 @keyframes robot-blink {
   0%,
-  94%,
   100% {
     transform: scaleY(1);
   }
-  97% {
+  50% {
     transform: scaleY(0.1);
   }
 }
@@ -700,34 +749,6 @@
   }
 }
 
-@keyframes robot-404 {
-  0% {
-    transform: none;
-    opacity: 1;
-  }
-  10% {
-    transform: translateX(2.5px);
-  }
-  13% {
-    transform: translateX(-3px) skewX(10deg);
-    opacity: 0.6;
-  }
-  16% {
-    transform: none;
-    opacity: 1;
-  }
-  55% {
-    transform: translateX(-2px);
-  }
-  58% {
-    transform: none;
-    opacity: 0.4;
-  }
-  61% {
-    opacity: 1;
-  }
-}
-
 @keyframes robot-pop {
   from {
     transform: scale(0.3);
@@ -762,12 +783,32 @@
 }
 
 @keyframes robot-breathe {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1, 1);
+  0% {
+    transform: translate3d(0, 0px, 0) scale(1, 1);
+  }
+  12.5% {
+    transform: translate3d(0, 0.293px, 0) scale(1.004, 0.996);
+  }
+  25% {
+    transform: translate3d(0, 1px, 0) scale(1.012, 0.988);
+  }
+  37.5% {
+    transform: translate3d(0, 1.707px, 0) scale(1.021, 0.979);
   }
   50% {
     transform: translate3d(0, 2px, 0) scale(1.025, 0.975);
+  }
+  62.5% {
+    transform: translate3d(0, 1.707px, 0) scale(1.021, 0.979);
+  }
+  75% {
+    transform: translate3d(0, 1px, 0) scale(1.012, 0.988);
+  }
+  87.5% {
+    transform: translate3d(0, 0.293px, 0) scale(1.004, 0.996);
+  }
+  100% {
+    transform: translate3d(0, 0px, 0) scale(1, 1);
   }
 }
 
@@ -985,15 +1026,6 @@
   }
 }
 
-@keyframes robot-scan-pulse {
-  0% {
-    opacity: 0.7;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
 @keyframes robot-holo-exit {
   0% {
     opacity: 1;
@@ -1094,38 +1126,6 @@
   }
 }
 
-@keyframes robot-jitter-red {
-  0% {
-    opacity: 0.7;
-    clip-path: inset(30% 0 50% 0);
-    transform: translate3d(-3px, 0, 0);
-  }
-  35% {
-    clip-path: inset(60% 0 25% 0);
-    transform: translate3d(2px, 0, 0);
-  }
-  70%,
-  100% {
-    opacity: 0;
-  }
-}
-
-@keyframes robot-jitter-cyan {
-  0% {
-    opacity: 0.7;
-    clip-path: inset(55% 0 30% 0);
-    transform: translate3d(3px, 0, 0);
-  }
-  35% {
-    clip-path: inset(20% 0 65% 0);
-    transform: translate3d(-2px, 0, 0);
-  }
-  70%,
-  100% {
-    opacity: 0;
-  }
-}
-
 /* Windows "Animation effects" off: no hover, glitches or plays; appearing and vanishing are a
    plain fade. Expressions still change. */
 @media (prefers-reduced-motion: reduce) {
@@ -1157,3 +1157,6 @@
     transform: none;
   }
 }
+
+
+
