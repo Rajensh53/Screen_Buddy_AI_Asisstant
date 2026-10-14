@@ -1,12 +1,15 @@
 //! The tray icon and the mascot's right-click menu. Both menus use the same item ids, and all
 //! clicks go to `handle_menu_event` (registered once with `app.on_menu_event`).
 
+use std::thread;
+use std::time::Duration;
+
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow, Wry};
 
 use crate::settings::SettingsState;
-use crate::windows::{MASCOT, settings};
+use crate::windows::{MASCOT, POPUP, popup, settings};
 
 const SETTINGS: &str = "settings";
 const PAUSE: &str = "pause";
@@ -15,6 +18,11 @@ const QUIT: &str = "quit";
 const TEST_OLLAMA: &str = "test_ollama";
 #[cfg(debug_assertions)]
 const PREVIEW_MASCOT: &str = "preview_mascot";
+
+/// Sent to the mascot on Quit: it glitches away into a beam of light (Mascot.tsx).
+const MASCOT_EXIT: &str = "mascot-exit";
+/// How long that takes before the app closes.
+const EXIT_ANIMATION: Duration = Duration::from_millis(650);
 
 /// Event emitted to all windows with the new paused state (`bool`).
 pub const PAUSED_CHANGED: &str = "paused-changed";
@@ -67,7 +75,7 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
         PAUSE => {
             app.state::<SettingsState>().update(app, |s| s.paused = !s.paused);
         }
-        QUIT => app.exit(0),
+        QUIT => quit(app),
         #[cfg(debug_assertions)]
         TEST_OLLAMA => debug::test_ollama(),
         // The mascot shows each of its looks for 2 s (Mascot.tsx, debug builds only).
@@ -78,6 +86,24 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             }
         }
         _ => {}
+    }
+}
+
+/// Quit: the popup goes, the mascot plays its exit glitch, then the app closes.
+fn quit(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(POPUP) {
+        let _ = popup::hide(&window);
+    }
+    if let Err(err) = app.emit_to(MASCOT, MASCOT_EXIT, ()) {
+        log::warn!("could not emit {MASCOT_EXIT}: {err}");
+    }
+    let handle = app.clone();
+    let spawned = thread::Builder::new().name("quit".into()).spawn(move || {
+        thread::sleep(EXIT_ANIMATION);
+        handle.exit(0);
+    });
+    if spawned.is_err() {
+        app.exit(0);
     }
 }
 

@@ -1,12 +1,13 @@
 //! The mascot's flight: from its home spot to the popup when a selection is explained, and back
 //! home when the popup closes. The robot's look in flight (bank, thruster, shadow) is CSS in the
-//! mascot window, driven by `mascot-flight` events.
+//! mascot window, driven by `mascot-flight` events. At startup it also flies in from the middle
+//! of the screen to its corner (`relocate`).
 //!
 //! The window moves on its own thread, one step per screen refresh (`DwmFlush`), along an eased
 //! curve computed from the elapsed time, so the motion is smooth even if a frame comes late.
 //! It never activates a window.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,7 +23,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
 use super::MASCOT;
-use super::mascot;
 use super::placement::{Side, Size};
 use crate::flow::Flow;
 use crate::selection::{Point, Rect};
@@ -36,14 +36,6 @@ const SHORTEST_FLIGHT: Duration = Duration::from_millis(400);
 const LONGEST_FLIGHT: Duration = Duration::from_millis(600);
 /// Flights this long (in physical pixels) or longer take `LONGEST_FLIGHT`.
 const LONG_DISTANCE: f64 = 1500.0;
-
-/// Set while the window is being moved by a flight, so the position saver ignores those moves
-/// (`mascot::save_when_moved`): only the user's own drags change the home spot.
-static ANIMATING: AtomicBool = AtomicBool::new(false);
-
-pub fn is_animating() -> bool {
-    ANIMATING.load(Ordering::SeqCst)
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -141,21 +133,28 @@ impl Flight {
     pub fn fly_to(&self, target: Point) -> Option<Duration> {
         let from = self.position()?;
         lock(&self.home).get_or_insert(from);
-        self.start(from, PhysicalPosition::new(target.x, target.y), false)
+        self.start(from, PhysicalPosition::new(target.x, target.y), None, false)
+    }
+
+    /// Flies to `target` in `duration` and makes it the new home: the intro flight at startup.
+    pub fn relocate(&self, target: Point, duration: Duration) {
+        let Some(from) = self.position() else { return };
+        lock(&self.home).take();
+        self.start(from, PhysicalPosition::new(target.x, target.y), Some(duration), true);
     }
 
     /// Flies back home, if away.
     pub fn return_home(&self) {
         let Some(home) = *lock(&self.home) else { return };
         let Some(from) = self.position() else { return };
-        self.start(from, home, true);
+        self.start(from, home, None, true);
     }
+
     /// The user grabbed the mascot: stop flying. Wherever it is dropped becomes the new home
-    /// (saved by `mascot::save_when_moved`).
+    /// (for this session; each start picks a new corner).
     pub fn cancel(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         lock(&self.home).take();
-        ANIMATING.store(false, Ordering::SeqCst);
         self.emit(false, Direction::None);
     }
 
@@ -163,12 +162,19 @@ impl Flight {
         self.app.get_webview_window(MASCOT)?.outer_position().ok()
     }
 
-    fn start(&self, from: PhysicalPosition<i32>, to: PhysicalPosition<i32>, returning: bool) -> Option<Duration> {
+    /// `duration`: how long the flight takes, or `None` for the usual `flight_duration`.
+    fn start(
+        &self,
+        from: PhysicalPosition<i32>,
+        to: PhysicalPosition<i32>,
+        duration: Option<Duration>,
+        returning: bool,
+    ) -> Option<Duration> {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let hwnd = self.app.get_webview_window(MASCOT).and_then(|w| w.hwnd().ok())?;
         let (a, b) = (Point::new(from.x, from.y), Point::new(to.x, to.y));
         let distance = f64::from(b.x - a.x).hypot(f64::from(b.y - a.y));
-        let duration = (from != to && animations_enabled()).then(|| flight_duration(distance));
+        let duration = (from != to && animations_enabled()).then(|| duration.unwrap_or_else(|| flight_duration(distance)));
         // HWND is not Send; the thread rebuilds it from the raw value.
         let hwnd_raw = hwnd.0 as isize;
         let app = self.app.clone();
@@ -177,7 +183,6 @@ impl Flight {
             let flight = app.state::<Flight>();
             let current = || flight.generation.load(Ordering::SeqCst) == generation;
             let hwnd = HWND(hwnd_raw as *mut _);
-            ANIMATING.store(true, Ordering::SeqCst);
 
             if let Some(duration) = duration {
                 flight.emit(true, bank(a, b));
@@ -201,9 +206,6 @@ impl Flight {
             }
 
             if current() {
-                // The window's last `Moved` event arrives after this: it must not count as a user move.
-                mascot::placed_at(to);
-                ANIMATING.store(false, Ordering::SeqCst);
                 if returning {
                     lock(&flight.home).take();
                 }

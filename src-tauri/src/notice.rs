@@ -129,15 +129,24 @@ pub fn part_of_day(hour: u16) -> &'static str {
     }
 }
 
-/// The fixed startup greeting, used when the model can't write one in time. `name` may be empty.
-pub fn greeting_for(hour: u16, name: &str) -> String {
+/// Startup greetings that need no model: used when Ollama isn't running, the model is missing,
+/// or the model is too slow to write one. `{name}` is the user's name.
+pub const SAVED_GREETINGS: [&str; 4] = [
+    "Hey {name}! 👋 I'm ready. Select any word and I'll explain it.",
+    "Welcome back, {name}! 🤖 Got a tricky word? Just select it.",
+    "Hi {name}! ✨ Your word buddy is here. Select anything you want explained.",
+    "Hello {name}! 📚 Select a word or a sentence, and I'll make it simple.",
+];
+
+/// One of the `SAVED_GREETINGS` (`index` wraps around), with the user's `name`, or without a
+/// name when it is empty.
+pub fn saved_greeting(index: usize, name: &str) -> String {
+    let template = SAVED_GREETINGS[index % SAVED_GREETINGS.len()];
     let name = name.trim();
-    let to = |s: &str| if name.is_empty() { s.to_owned() } else { format!("{s}, {name}") };
-    match part_of_day(hour) {
-        "morning" => format!("{}! ☀️ Ready to help!", to("Good morning")),
-        "afternoon" => format!("{}! 🌤️ How can I help today?", to("Good afternoon")),
-        "evening" => format!("{}! 🌆 Ready whenever you are!", to("Good evening")),
-        _ => format!("{}? 🌙 I'm here for you!", to("Working late")),
+    if name.is_empty() {
+        template.replace(", {name}", "").replace(" {name}", "")
+    } else {
+        template.replace("{name}", name)
     }
 }
 
@@ -310,31 +319,46 @@ mod tests {
     }
 
     #[test]
-    fn greeting_follows_the_time_of_day() {
-        let morning = "Good morning! ☀️ Ready to help!";
-        let afternoon = "Good afternoon! 🌤️ How can I help today?";
-        let evening = "Good evening! 🌆 Ready whenever you are!";
-        let late = "Working late? 🌙 I'm here for you!";
+    fn part_of_day_follows_the_hour() {
         for (hour, expected) in [
-            (0, late),
-            (4, late),
-            (5, morning),
-            (11, morning),
-            (12, afternoon),
-            (16, afternoon),
-            (17, evening),
-            (21, evening),
-            (22, late),
-            (23, late),
+            (0, "night"),
+            (4, "night"),
+            (5, "morning"),
+            (11, "morning"),
+            (12, "afternoon"),
+            (16, "afternoon"),
+            (17, "evening"),
+            (21, "evening"),
+            (22, "night"),
         ] {
-            assert_eq!(greeting_for(hour, ""), expected, "hour {hour}");
+            assert_eq!(part_of_day(hour), expected, "hour {hour}");
         }
     }
 
     #[test]
-    fn fallback_greeting_uses_the_name() {
-        assert_eq!(greeting_for(9, " Rajnesh "), "Good morning, Rajnesh! ☀️ Ready to help!");
-        assert_eq!(greeting_for(23, "Rajnesh"), "Working late, Rajnesh? 🌙 I'm here for you!");
+    fn saved_greeting_uses_the_name() {
+        assert_eq!(saved_greeting(0, " Rajnesh "), "Hey Rajnesh! 👋 I'm ready. Select any word and I'll explain it.");
+        assert_eq!(saved_greeting(1, "Rajnesh"), "Welcome back, Rajnesh! 🤖 Got a tricky word? Just select it.");
+        for i in 0..SAVED_GREETINGS.len() {
+            assert!(saved_greeting(i, "Rajnesh").contains("Rajnesh"), "greeting {i}");
+        }
+    }
+
+    #[test]
+    fn saved_greeting_without_a_name_reads_well() {
+        assert_eq!(saved_greeting(0, ""), "Hey! 👋 I'm ready. Select any word and I'll explain it.");
+        assert_eq!(saved_greeting(1, "  "), "Welcome back! 🤖 Got a tricky word? Just select it.");
+        for i in 0..SAVED_GREETINGS.len() {
+            let text = saved_greeting(i, "");
+            assert!(!text.contains("{name}") && !text.contains(" !") && !text.contains(",!"), "{text}");
+        }
+    }
+
+    #[test]
+    fn saved_greetings_are_all_different_and_wrap_around() {
+        let all: std::collections::HashSet<String> = (0..SAVED_GREETINGS.len()).map(|i| saved_greeting(i, "R")).collect();
+        assert_eq!(all.len(), SAVED_GREETINGS.len());
+        assert_eq!(saved_greeting(2 + SAVED_GREETINGS.len(), "R"), saved_greeting(2, "R"));
     }
 
     #[test]

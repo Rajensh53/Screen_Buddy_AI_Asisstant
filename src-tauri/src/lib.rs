@@ -86,7 +86,7 @@ pub fn run() {
             app.state::<AppState>().paused.store(settings.paused, Ordering::SeqCst);
 
             app.manage(crate::windows::flight::Flight::new(handle.clone()));
-            crate::windows::mascot::setup(handle, settings.mascot_position)?;
+            crate::windows::mascot::setup(handle)?;
             crate::windows::settings::setup(handle)?;
             // Before the tray and the selection worker, which both use it.
             app.manage(Flow::new(handle.clone(), &settings.model)?);

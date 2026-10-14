@@ -50,10 +50,10 @@ const LANDING_GRACE: Duration = Duration::from_millis(150);
 /// Startup notices wait until the windows have loaded and listen for events, and, when the
 /// greeting is on, a little longer, so they rarely cut it short.
 const STARTUP_NOTICE_DELAY: Duration = Duration::from_secs(3);
-const STARTUP_NOTICE_DELAY_AFTER_GREETING: Duration = Duration::from_millis(5500);
-/// The greeting appears once the windows have loaded, and stays this long.
-const GREETING_DELAY: Duration = Duration::from_millis(1500);
-/// How long the greeting waits for the model to write it.
+const STARTUP_NOTICE_DELAY_AFTER_GREETING: Duration = Duration::from_secs(6);
+/// The greeting bubble appears once the mascot has landed from its intro flight, after a breath.
+const GREETING_DELAY: Duration = mascot::INTRO_TIME.saturating_add(Duration::from_millis(300));
+/// How long the greeting waits for the model to write it, counted from the request.
 const GREETING_WAIT: Duration = Duration::from_secs(6);
 /// A new greeting every time: much livelier than the explanations.
 const GREETING_TEMPERATURE: f64 = 0.9;
@@ -111,8 +111,9 @@ pub fn popup_look(popup: Rect, mascot: Option<Rect>, scale: f64) -> PopupLook {
         return PopupLook { origin_x: 0.5, origin_y: 0.5, tail: None, tail_offset: 0.0 };
     };
     let center_x = f64::from(m.left + m.right) / 2.0;
-    // The robot's head sits in the upper part of its window: the pointer aims there.
-    let head_y = f64::from(m.top) + f64::from(m.height()) * 0.35;
+    // The robot's head floats above its glow, in the upper part of its window: the pointer aims at
+    // the middle of the head.
+    let head_y = f64::from(m.top) + f64::from(m.height()) * 0.42;
     let fraction = |value: f64, start: i32, length: i32| ((value - f64::from(start)) / f64::from(length)).clamp(0.0, 1.0);
     let css = |physical: f64| physical / scale;
 
@@ -271,39 +272,60 @@ impl Flow {
     }
 
     /// The startup greeting: the local model writes a new one each time, with the user's name,
-    /// shown as a speech bubble next to the mascot. If the model can't answer within
-    /// `GREETING_WAIT` (Ollama not running, a cold start), a fixed greeting is shown instead; the
-    /// request still loads the model, so the first real answer is fast. Only the name and the time
-    /// of day are sent, to the local model. The popup never takes focus.
+    /// shown as a speech bubble next to the mascot once it has landed from its intro flight.
+    /// If Ollama isn't running or the model is missing, one of the saved greetings is shown
+    /// instead, without waiting; also if the model can't answer within `GREETING_WAIT` (a cold
+    /// start). The request still loads the model, so the first real answer is fast. Only the name
+    /// and the time of day are sent, to the local model. The popup never takes focus.
     /// Then the Ollama startup check runs, so its notice never cuts the greeting short.
     pub fn greet(&self) {
         let app = self.app.clone();
         let _ = thread::Builder::new().name("greeting".into()).spawn(move || {
-            thread::sleep(GREETING_DELAY);
+            let show_at = Instant::now() + GREETING_DELAY;
             let flow = app.state::<Flow>();
             // The name from the settings, or else the Windows account's first name.
             let name = settings::greeting_name(&app.state::<SettingsState>().get());
             let (hour, weekday) = local_time();
+            let roll = launch_mood();
 
-            emit(&app, BuddyEvent::GreetingPending); // The mascot thinks while the model writes.
-            let (system, user) = notice::greeting_prompt(&name, hour, weekday, launch_mood());
-            let (tx, rx) = mpsc::channel();
-            let explainer = Arc::clone(&flow.explainer);
-            async_runtime::spawn(async move {
-                let _ = tx.send(explainer.ask(&system, &user, GREETING_TEMPERATURE).await);
-            });
-            let written = match rx.recv_timeout(GREETING_WAIT) {
-                Ok(Ok(text)) => notice::clean_greeting(&text).map(|g| notice::ensure_name(g, &name)),
-                Ok(Err(err)) => {
-                    log::info!("[greeting] the model couldn't write one: {err}");
-                    None
+            // Ask the model right away, so it loads while the mascot flies in. Checked first:
+            // without Ollama or the model there is nothing to wait for.
+            let asked = match async_runtime::block_on(flow.explainer.health()) {
+                Ok(()) => {
+                    let (system, user) = notice::greeting_prompt(&name, hour, weekday, roll);
+                    let (tx, rx) = mpsc::channel();
+                    let explainer = Arc::clone(&flow.explainer);
+                    async_runtime::spawn(async move {
+                        let _ = tx.send(explainer.ask(&system, &user, GREETING_TEMPERATURE).await);
+                    });
+                    Some((rx, Instant::now() + GREETING_WAIT))
                 }
-                Err(_) => {
-                    log::info!("[greeting] the model is still loading; using the fixed greeting");
+                Err(err) => {
+                    log::info!("[greeting] using a saved greeting: {err}");
                     None
                 }
             };
-            let text = written.unwrap_or_else(|| notice::greeting_for(hour, &name));
+            thread::sleep(show_at.saturating_duration_since(Instant::now()));
+
+            let written = asked.and_then(|(rx, deadline)| {
+                // Still writing once the mascot has landed: it thinks meanwhile.
+                let reply = rx.try_recv().or_else(|_| {
+                    emit(&app, BuddyEvent::GreetingPending);
+                    rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).map_err(|_| ())
+                });
+                match reply {
+                    Ok(Ok(text)) => notice::clean_greeting(&text).map(|g| notice::ensure_name(g, &name)),
+                    Ok(Err(err)) => {
+                        log::info!("[greeting] the model couldn't write one: {err}");
+                        None
+                    }
+                    Err(()) => {
+                        log::info!("[greeting] the model is still loading; using a saved greeting");
+                        None
+                    }
+                }
+            });
+            let text = written.unwrap_or_else(|| notice::saved_greeting(roll, &name));
 
             // A selection made meanwhile wins; no bubble then.
             if !flow.popup_visible() {
@@ -761,11 +783,11 @@ mod tests {
         json!({"origin_x": 0.5, "origin_y": 0.5, "tail": null, "tail_offset": 0.0})
     }
 
-    /// An answer popup (360x200 at 100%) and the mascot window (140x140).
+    /// An answer popup (360x200 at 100%) and the mascot window (160x150).
     const POPUP: Rect = Rect { left: 300, top: 430, right: 660, bottom: 630 };
 
     fn mascot_at(left: i32, top: i32) -> Option<Rect> {
-        Some(Rect { left, top, right: left + 140, bottom: top + 140 })
+        Some(Rect { left, top, right: left + 160, bottom: top + 150 })
     }
 
     #[test]
@@ -773,12 +795,12 @@ mod tests {
         let look = popup_look(POPUP, mascot_at(668, 430), 1.0);
         assert_eq!(look.tail, Some(TailSide::Right));
         assert_eq!(look.origin_x, 1.0);
-        assert!((look.tail_offset - 49.0).abs() < 0.01); // the robot's head
+        assert!((look.tail_offset - 63.0).abs() < 0.01); // the robot's head
     }
 
     #[test]
     fn mascot_docked_left_gets_a_pointer_on_the_left() {
-        let look = popup_look(POPUP, mascot_at(152, 430), 1.0);
+        let look = popup_look(POPUP, mascot_at(132, 430), 1.0);
         assert_eq!(look.tail, Some(TailSide::Left));
         assert_eq!(look.origin_x, 0.0);
     }
@@ -790,7 +812,7 @@ mod tests {
         let look = popup_look(bubble, mascot_at(1600, 840), 1.0);
         assert_eq!(look.tail, Some(TailSide::Bottom));
         assert_eq!(look.origin_y, 1.0);
-        assert!((look.tail_offset - 170.0).abs() < 0.01);
+        assert!((look.tail_offset - 180.0).abs() < 0.01);
     }
 
     #[test]
@@ -804,7 +826,7 @@ mod tests {
     #[test]
     fn pointer_offset_is_in_css_pixels() {
         let look = popup_look(POPUP, mascot_at(668, 430), 1.5);
-        assert!((look.tail_offset - 49.0 / 1.5).abs() < 0.01);
+        assert!((look.tail_offset - 63.0 / 1.5).abs() < 0.01);
     }
 
     fn event(via_clipboard: bool) -> SelectionEvent {

@@ -1,5 +1,7 @@
-/* Screen Buddy's robot (Robot.tsx). Every state is CSS only: transforms and opacity, which are
-   cheap and smooth. SVG transforms use view-box coordinates (the 140x140 drawing). */
+/* Screen Buddy's floating robot head (Robot.tsx). Every look is CSS: transforms and opacity
+   (cheap and smooth), and the CSS `d` property, which morphs the LED eyes and mouth between
+   shapes. SVG transforms use view-box coordinates (the 160x150 drawing); the hover, the bank and
+   the glitches move HTML layers, which the GPU composites without repainting the drawing. */
 
 .mascot {
   position: relative;
@@ -15,234 +17,62 @@
 }
 
 .robot {
-  display: block;
+  /* The LED color: cyan; red or amber for problems. */
+  --led: #3ee6ff;
+  --holo: grayscale(1) sepia(1) hue-rotate(150deg) saturate(3.5) brightness(1.15);
+  position: relative;
   width: 100%;
   height: 100%;
   pointer-events: none;
-  transition: opacity 300ms ease;
 }
 
-/* --- Parts --- */
-
-.robot__shell {
-  fill: url(#sb-shell);
-  stroke: #1e293b;
-  stroke-width: 2.5;
+.robot--cant_read,
+.robot--refuse,
+.robot--offline {
+  --led: #ff3b5c;
 }
 
-.robot__neck {
-  fill: #cbd5e1;
-  stroke: #1e293b;
-  stroke-width: 2;
+.robot--warning {
+  --led: #ffb020;
 }
 
-.robot__ear {
-  fill: #2563eb;
-  stroke: #1e293b;
-  stroke-width: 2.5;
+/* --- Layers --- */
+
+/* The glow on the "desk": stays put, smaller and dimmer while the head rises. */
+.robot__pool {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 96px;
+  height: 16px;
+  margin-left: -48px;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(62, 230, 255, 0.55),
+    rgba(43, 140, 255, 0.22) 45%,
+    transparent 72%
+  );
+  filter: blur(2px);
+  animation: robot-pool 3.6s ease-in-out infinite;
+  transition:
+    opacity 300ms ease,
+    transform 300ms ease;
+  will-change: transform, opacity;
 }
 
-.robot__visor {
-  fill: url(#sb-visor);
-  stroke: #1e293b;
-  stroke-width: 2;
+.robot__hover {
+  position: absolute;
+  inset: 0;
+  animation: robot-hover 3.6s ease-in-out infinite;
+  will-change: transform;
 }
 
-.robot__visor-shine,
-.robot__lens-shine {
-  fill: none;
-  stroke: #ffffff;
-  stroke-opacity: 0.22;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-}
-
-.robot__line {
-  stroke: #1e293b;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-}
-
-.robot__spark,
-.robot__chest-light {
-  fill: #38bdf8;
-  transform-box: fill-box;
-  transform-origin: center;
-  transition: fill 300ms ease;
-}
-
-.robot__chest {
-  fill: #0f172a;
-  stroke: #38bdf8;
-  stroke-width: 2.5;
-  transition: stroke 300ms ease;
-}
-
-.eyes {
-  fill: #38bdf8;
-  opacity: 0;
-  transition: opacity 160ms ease;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.eyes--stroke {
-  fill: none;
-  stroke: #38bdf8;
-  stroke-width: 3.5;
-  stroke-linecap: round;
-}
-
-.eyes--half {
-  fill: #38bdf8;
-  fill-opacity: 0.55;
-}
-
-.eyes__glint {
-  fill: #e0f2fe;
-}
-
-.robot__blush {
-  fill: #f472b6;
-  opacity: 0;
-  transition: opacity 200ms ease;
-}
-
-.robot__mouth {
-  fill: none;
-  stroke: #38bdf8;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-  opacity: 0;
-  transition: opacity 160ms ease;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.robot__handle {
-  stroke: #1e293b;
-  stroke-width: 4.5;
-  stroke-linecap: round;
-}
-
-.robot__lens {
-  fill: url(#sb-lens);
-  stroke: #1e293b;
-  stroke-width: 3;
-}
-
-.robot__magnifier,
-.robot__question,
-.robot__zzz,
-.badge {
-  opacity: 0;
-  transition: opacity 200ms ease;
-}
-
-.robot__magnifier {
-  transform-box: view-box;
-  transform-origin: 99px 90px;
-}
-
-.robot__question {
-  fill: #38bdf8;
-  font: 700 22px "Nunito", "Segoe UI", system-ui, sans-serif;
-  filter: url(#sb-glow);
-}
-
-.robot__z {
-  fill: #93c5fd;
-  font: 700 12px "Nunito", "Segoe UI", system-ui, sans-serif;
-}
-
-.robot__z--1 {
-  font-size: 10px;
-}
-
-.robot__z--3 {
-  font-size: 14px;
-}
-
-.robot__head {
-  transform-box: view-box;
-  transform-origin: 70px 74px;
-  transition: transform 250ms ease;
-}
-
-.robot__float {
-  transform-box: view-box;
-  transform-origin: 70px 116px;
-}
-
-/* --- Badges (situation reactions) --- */
-
-.badge {
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.badge__shackle {
-  fill: none;
-  stroke: #38bdf8;
-  stroke-width: 2.4;
-}
-
-.badge__lock-body {
-  fill: #38bdf8;
-  stroke: #0f172a;
-  stroke-width: 1.5;
-}
-
-.badge__keyhole {
-  fill: #0f172a;
-}
-
-.badge__no-ring {
-  fill: #f43f5e;
-  stroke: #ffffff;
-  stroke-width: 2;
-}
-
-.badge__no-bar {
-  fill: #ffffff;
-}
-
-.badge__warn-triangle {
-  fill: #f59e0b;
-  stroke: #ffffff;
-  stroke-width: 1.8;
-  stroke-linejoin: round;
-}
-
-.badge__warn-mark {
-  fill: #0f172a;
-}
-
-.badge__plug-prong {
-  stroke: #1e293b;
-  stroke-width: 2;
-  stroke-linecap: round;
-}
-
-.badge__plug-body {
-  fill: #94a3b8;
-  stroke: #1e293b;
-  stroke-width: 1.6;
-}
-
-.badge__plug-cable {
-  fill: none;
-  stroke: #94a3b8;
-  stroke-width: 2.2;
-  stroke-linecap: round;
-}
-
-/* --- Flight: bank, thruster, shadow --- */
-
+/* Leans into the direction of flight, with a little overshoot. */
 .robot__bank {
-  transform-box: view-box;
-  transform-origin: 70px 80px;
-  /* A little overshoot, like leaning into a turn and settling back. */
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 42%;
   transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -254,253 +84,509 @@
   transform: rotate(12deg);
 }
 
-.robot__thruster {
+.robot__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  transform-origin: 50% 42%;
+}
+
+/* --- Chassis --- */
+
+.robot__shell {
+  fill: url(#sb-shell);
+  stroke: rgba(15, 23, 42, 0.22);
+  stroke-width: 1;
+}
+
+.robot__highlight {
+  fill: #ffffff;
+  opacity: 0.8;
+}
+
+.robot__pod {
+  fill: url(#sb-pod);
+  stroke: #0b1018;
+  stroke-width: 1;
+}
+
+.robot__pod-ring {
+  fill: none;
+  stroke: var(--led);
+  stroke-opacity: 0.55;
+  stroke-width: 1.2;
+}
+
+.robot__bezel {
+  fill: #1a2230;
+}
+
+.robot__visor-tint {
   opacity: 0;
-  transform: scaleY(0);
+  transition: opacity 300ms ease;
+}
+
+.robot__led-stop {
+  stop-color: var(--led);
+}
+
+.robot__glare {
+  fill: none;
+  stroke: #ffffff;
+  stroke-opacity: 0.2;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+
+.robot__cone {
+  fill: url(#sb-cone);
+  opacity: 0.5;
   transform-box: view-box;
-  transform-origin: 70px 113px;
+  transform-origin: 80px 102px;
   transition:
-    opacity 200ms ease,
-    transform 200ms ease;
+    opacity 300ms ease,
+    transform 300ms ease;
 }
 
-.robot__flame {
-  fill: url(#sb-flame);
-  filter: url(#sb-glow);
+.robot__vent {
+  stroke: #94a3b8;
+  stroke-width: 3;
+  stroke-linecap: round;
 }
 
-.robot__flame-core {
-  fill: #e0f2fe;
-  opacity: 0.85;
+.robot__port {
+  fill: #cbd5e1;
+  stroke: #64748b;
+  stroke-width: 1.2;
 }
 
-.robot--flying .robot__thruster {
-  opacity: 1;
-  transform: scaleY(1);
-}
-
-.robot--flying .robot__flame {
-  animation: robot-flicker 90ms ease-in-out infinite alternate;
+/* Pivots for the turn (turn.ts), and the back side, hidden until it turns round. */
+.robot__skull,
+.robot__face,
+.robot__back-head {
   transform-box: view-box;
-  transform-origin: 70px 113px;
+  transform-origin: 80px 63px;
 }
 
-/* The shadow: smaller, softer and lighter while in the air; back on landing. */
-.robot__shadow-wrap {
+.robot__ear--left,
+.robot__ear-front--left {
   transform-box: view-box;
-  transform-origin: 70px 129px;
+  transform-origin: 22px 64px;
+}
+
+.robot__ear--right,
+.robot__ear-front--right {
+  transform-box: view-box;
+  transform-origin: 138px 64px;
+}
+
+.robot__hop {
+  transform-box: view-box;
+  transform-origin: 80px 110px;
+}
+
+.robot__ear-front,
+.robot__back-head {
+  visibility: hidden;
+}
+
+/* --- LED face --- */
+
+.led__eye,
+.led__mouth,
+.led__dots,
+.led__alert,
+.led__404,
+.led__plug rect,
+.led__lock rect,
+.led__z {
+  fill: var(--led);
+}
+
+.led__eye,
+.led__mouth {
   transition:
-    transform 300ms ease,
-    opacity 300ms ease;
+    d 240ms cubic-bezier(0.3, 0.7, 0.25, 1),
+    opacity 180ms ease;
 }
 
-.robot--flying .robot__shadow-wrap {
-  transform: scale(0.55);
-  opacity: 0.4;
+.led__eyes {
+  transform-box: view-box;
+  transform-origin: 80px 60px;
+  transition: opacity 180ms ease;
 }
 
-.robot__shadow {
-  fill: #0f172a;
-  opacity: 0.18;
+.led__mouth {
+  transform-box: view-box;
+  transform-origin: 80px 74px;
+}
+
+.led__stroke {
+  fill: none;
+  stroke: var(--led);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+
+.led__cross line {
+  stroke: var(--led);
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+.led__ring {
+  fill: none;
+  stroke: var(--led);
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  stroke-dasharray: 38 25;
+  transform-box: view-box;
+  transform-origin: 80px 65px;
+}
+
+.led__blush rect {
+  fill: #ff7eb6;
+}
+
+.led__z {
+  font: 700 9px "Nunito", sans-serif;
+}
+
+/* Icons are hidden until their state shows them. */
+.led__dots,
+.led__ring,
+.led__alert,
+.led__cross,
+.led__404,
+.led__plug,
+.led__lock,
+.led__blush,
+.led__zzz,
+.led__sweep {
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.led__dots circle {
   transform-box: fill-box;
   transform-origin: center;
 }
 
-/* --- States: which eyes and extras show --- */
-
-.robot--idle .eyes--relaxed,
-.robot--noticed .eyes--wide,
-.robot--thinking .eyes--focused,
-.robot--talking .eyes--happy,
-.robot--cant_read .eyes--puzzled,
-.robot--shy .eyes--sleep,
-.robot--refuse .eyes--focused,
-.robot--warning .eyes--wide,
-.robot--offline .eyes--half {
-  opacity: 1;
+.led__alert,
+.led__cross {
+  transform-box: view-box;
+  transform-origin: 80px 64px;
 }
 
-.robot--idle .robot__mouth,
-.robot--talking .robot__mouth,
-.robot--shy .robot__mouth {
-  opacity: 1;
+.led {
+  transition: opacity 400ms ease;
 }
 
-.robot--shy .robot__blush {
-  opacity: 0.55;
+/* --- States --- */
+
+/* idle: relaxed eyes that blink now and then */
+.robot--idle .led__eyes {
+  animation: robot-blink 5.2s infinite;
 }
 
-.robot--noticed .robot__magnifier {
-  opacity: 1;
+/* noticed: the eyes widen, a radar sweep crosses the screen, then a glowing "!" */
+.robot--noticed .led__eyes,
+.robot--noticed .led__mouth {
+  animation: robot-noticed-face 450ms forwards;
 }
 
-.robot--noticed .robot__arm--right {
+.robot--noticed .led__alert {
+  animation: robot-noticed-alert 450ms forwards;
+}
+
+.robot--noticed .led__sweep {
+  animation: robot-sweep 420ms ease-out;
+}
+
+/* The face makes way for the icons. */
+.robot--thinking .led__eyes,
+.robot--thinking .led__mouth,
+.robot--cant_read .led__eyes,
+.robot--cant_read .led__mouth,
+.robot--refuse .led__eyes,
+.robot--refuse .led__mouth,
+.robot--warning .led__eyes,
+.robot--warning .led__mouth,
+.robot--offline .led__eyes,
+.robot--offline .led__mouth {
   opacity: 0;
 }
 
-.robot--cant_read .robot__question,
-.robot--shy .badge--lock,
-.robot--refuse .badge--no,
-.robot--warning .badge--warn,
-.robot--offline .badge--plug {
+/* thinking: pulsing dots, then a spinning loading ring */
+.robot--thinking .led__dots {
   opacity: 1;
+  animation: robot-think-dots 4s infinite;
 }
 
-.robot--cant_read .robot__head {
-  transform: rotate(-10deg);
+.robot--thinking .led__dots circle {
+  animation: robot-dot 1s ease-in-out infinite;
 }
 
-/* offline: the antenna spark and chest light go dark */
-.robot--offline .robot__spark,
-.robot--offline .robot__chest-light {
-  fill: #64748b;
+.robot--thinking .led__dots circle:nth-child(2) {
+  animation-delay: 0.15s;
 }
 
-.robot--offline .robot__chest {
-  stroke: #64748b;
+.robot--thinking .led__dots circle:nth-child(3) {
+  animation-delay: 0.3s;
 }
 
-/* Paused overrides every state's look: sleeping eyes, dimmed, "Zzz". */
-.robot--paused {
-  opacity: 0.62;
-}
-
-.robot--paused .eyes,
-.robot--paused .robot__mouth,
-.robot--paused .robot__magnifier,
-.robot--paused .robot__question,
-.robot--paused .robot__blush,
-.robot--paused .badge {
-  opacity: 0;
-}
-
-.robot--paused .eyes.eyes--sleep,
-.robot--paused .robot__zzz {
-  opacity: 1;
-}
-
-.robot--paused .robot__arm--right {
-  opacity: 1;
-}
-
-.robot--paused .robot__head {
-  transform: none;
-}
-
-.robot--paused .robot__spark,
-.robot--paused .robot__chest-light {
-  fill: #64748b;
-}
-
-/* --- Animations --- */
-
-/* A gentle float (and the shadow breathing with it) in the calm states */
-.robot--idle .robot__float,
-.robot--thinking .robot__float,
-.robot--cant_read .robot__float,
-.robot--shy .robot__float,
-.robot--warning .robot__float,
-.robot--offline .robot__float {
-  animation: robot-float 3.5s ease-in-out infinite;
-}
-
-.robot--idle .robot__shadow,
-.robot--thinking .robot__shadow,
-.robot--cant_read .robot__shadow,
-.robot--shy .robot__shadow,
-.robot--warning .robot__shadow,
-.robot--offline .robot__shadow {
-  animation: robot-shadow 3.5s ease-in-out infinite;
-}
-
-.robot--idle .eyes--relaxed {
-  animation: robot-blink 5s infinite;
-}
-
-/* noticed: a hop, and the magnifier swings up in front of the visor */
-.robot--noticed .robot__float {
-  animation: robot-hop 400ms ease-out;
-}
-
-.robot--noticed .robot__magnifier {
-  animation: robot-magnify 320ms ease-out;
-}
-
-/* thinking: the antenna spark and the chest light pulse */
-.robot--thinking .robot__spark,
-.robot--thinking .robot__chest-light {
-  animation: robot-pulse 1.2s ease-in-out infinite;
-}
-
-/* talking: a light bounce, and the mouth opens and closes */
-.robot--talking .robot__float {
-  animation: robot-bounce 600ms ease-in-out infinite alternate;
-}
-
-.robot--talking .robot__mouth {
-  animation: robot-talk 240ms ease-in-out infinite alternate;
-}
-
-/* reactions: the badge pops in, then bobs */
-.robot--cant_read .robot__question,
-.robot--shy .badge--lock,
-.robot--warning .badge--warn,
-.robot--offline .badge--plug {
+.robot--thinking .led__ring {
   animation:
-    robot-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1),
-    robot-question 1.2s ease-in-out 260ms infinite;
+    robot-think-ring 4s infinite,
+    robot-spin 0.9s linear infinite;
 }
 
-/* refuse: a quick head shake, and the no-entry badge pops in */
-.robot--refuse .robot__head {
-  animation: robot-shake 500ms ease-in-out 2;
+/* talking: happy arc eyes, the mouth moves with the words, a lively bounce */
+.robot--talking .led__mouth {
+  animation: robot-talk 0.32s ease-in-out infinite alternate;
 }
 
-.robot--refuse .badge--no {
-  animation: robot-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+.robot--talking .robot__hover {
+  animation: robot-talk-bounce 0.64s ease-in-out infinite;
 }
 
-/* paused: slow breathing, and the "Zzz" letters drift up one after the other */
-.robot--paused .robot__float {
-  animation: robot-float 6s ease-in-out infinite;
+/* Problems: the visor glows in the problem's color. */
+.robot--cant_read .robot__visor-tint,
+.robot--refuse .robot__visor-tint,
+.robot--warning .robot__visor-tint,
+.robot--offline .robot__visor-tint {
+  opacity: 0.35;
 }
 
-.robot--paused .robot__shadow {
-  animation: robot-shadow 6s ease-in-out infinite;
+/* can't read: a glitching "404" */
+.robot--cant_read .led__404 {
+  opacity: 1;
+  animation: robot-404 1.4s steps(1, end) infinite;
 }
 
-.robot--paused .robot__z {
+/* refuse (blocked app): a red "X" pops up */
+.robot--refuse .led__cross {
+  opacity: 1;
+  animation: robot-pop 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* warning: an amber "!" that pulses */
+.robot--warning .led__alert {
+  opacity: 1;
+  animation: robot-pulse 1s ease-in-out infinite;
+}
+
+/* offline (Ollama not running, model missing): an unplugged plug */
+.robot--offline .led__plug {
+  opacity: 1;
+  animation: robot-pulse 1.6s ease-in-out infinite;
+}
+
+/* shy (password field): looks away, a lock and blushing pixels */
+.robot--shy .led__lock,
+.robot--shy .led__blush {
+  opacity: 1;
+}
+
+/* paused: a dim screen, sleepy eyes, slow heavy breathing, "z z" rising */
+.robot--paused .led {
+  opacity: 0.5;
+}
+
+.robot--paused .led__eyes {
+  animation: none;
+}
+
+.robot--paused .led__zzz {
+  opacity: 1;
+}
+
+.robot--paused .led__z {
   animation: robot-z 3s ease-in-out infinite;
+}
+
+.robot--paused .led__z--2 {
+  animation-delay: 1.5s;
+}
+
+.robot--paused .robot__hover {
+  animation: robot-breathe 5.5s ease-in-out infinite;
+}
+
+.robot--paused .robot__cone {
+  opacity: 0.2;
+}
+
+/* flying: the light cone stretches and brightens; the glow on the ground fades */
+.robot--flying .robot__cone {
+  opacity: 0.95;
+  transform: scaleY(1.3);
+}
+
+.robot--flying .robot__pool {
+  animation: none;
+  opacity: 0.3;
+  transform: scale(0.6);
+}
+
+/* --- Idle play --- */
+
+.robot--play-glance .led__eyes {
+  animation: robot-glance 1.8s ease-in-out;
+}
+
+.robot--play-yawn .robot__hop {
+  animation: robot-yawn 2s ease-in-out;
+}
+
+.robot--play-yawn .led__mouth {
+  animation: robot-yawn-mouth 2s ease-in-out;
+}
+
+.robot--play-patrol .robot__hover {
+  animation: robot-patrol 2.4s ease-in-out;
+}
+
+.robot--play-greet .robot__hover {
+  animation: robot-greet 0.9s ease-in-out 2;
+}
+
+/* turn: driven from turn.ts, which moves the glow too */
+.robot--play-turn .robot__pool {
+  animation: none;
+  transition: none;
+}
+
+/* --- Hologram glitches --- */
+
+.glitch,
+.glitch__scan {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
   opacity: 0;
 }
 
-.robot--paused .robot__z--2 {
-  animation-delay: 1s;
+.glitch {
+  mix-blend-mode: screen;
+  will-change: transform, clip-path, opacity;
 }
 
-.robot--paused .robot__z--3 {
-  animation-delay: 2s;
+.glitch svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-@keyframes robot-float {
+.glitch__scan {
+  background: repeating-linear-gradient(to bottom, rgba(120, 240, 255, 0.24) 0 1px, transparent 1px 3px);
+  -webkit-mask-image: radial-gradient(ellipse 38% 34% at 50% 42%, #000 80%, transparent 100%);
+  mask-image: radial-gradient(ellipse 38% 34% at 50% 42%, #000 80%, transparent 100%);
+}
+
+/* boot: a beam opens into a flickering hologram with scanlines and a red/cyan split, then it
+   turns solid */
+.robot--glitch-boot .robot__svg {
+  animation: robot-holo-boot 850ms ease-out both;
+}
+
+.robot--glitch-boot .glitch--red {
+  animation: robot-slices-red 850ms steps(1, end) both;
+}
+
+.robot--glitch-boot .glitch--cyan {
+  animation: robot-slices-cyan 850ms steps(1, end) both;
+}
+
+.robot--glitch-boot .glitch__scan {
+  animation: robot-scan 850ms linear both;
+}
+
+.robot--glitch-boot .robot__pool {
+  animation: robot-fade-in 850ms ease-out both;
+}
+
+/* exit (Quit): slices, a collapse into a line of light, a beam, gone */
+.robot--glitch-exit .robot__hover,
+.robot--glitch-exit .robot__pool {
+  animation: none;
+}
+
+.robot--glitch-exit .robot__svg {
+  animation: robot-holo-exit 650ms ease-in forwards;
+}
+
+.robot--glitch-exit .glitch--red {
+  animation: robot-exit-red 650ms steps(1, end) forwards;
+}
+
+.robot--glitch-exit .glitch--cyan {
+  animation: robot-exit-cyan 650ms steps(1, end) forwards;
+}
+
+.robot--glitch-exit .glitch__scan {
+  animation: robot-scan 400ms linear forwards;
+}
+
+.robot--glitch-exit .robot__pool {
+  opacity: 0;
+  transition: opacity 350ms ease;
+}
+
+.robot__beam {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 6px;
+  height: 100%;
+  margin-left: -3px;
+  background: linear-gradient(to top, transparent, rgba(160, 245, 255, 0.95) 42%, transparent);
+  filter: blur(1px);
+  opacity: 0;
+  transform-origin: 50% 42%;
+  pointer-events: none;
+}
+
+.robot--glitch-exit .robot__beam {
+  animation: robot-beam 650ms ease-out forwards;
+}
+
+/* jitter: a short digital flicker when the state changes */
+.robot--glitch-jitter .glitch--red {
+  animation: robot-jitter-red 180ms steps(1, end) both;
+}
+
+.robot--glitch-jitter .glitch--cyan {
+  animation: robot-jitter-cyan 180ms steps(1, end) both;
+}
+
+.robot--glitch-jitter .glitch__scan {
+  animation: robot-scan-pulse 180ms ease-out both;
+}
+
+/* --- Keyframes --- */
+
+@keyframes robot-hover {
   0%,
   100% {
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
   50% {
-    transform: translateY(-4px);
+    transform: translate3d(0, -5px, 0);
   }
 }
 
-@keyframes robot-shadow {
+@keyframes robot-pool {
   0%,
   100% {
-    transform: scaleX(1);
-    opacity: 0.18;
+    transform: scale(1);
+    opacity: 1;
   }
   50% {
-    transform: scaleX(0.85);
-    opacity: 0.12;
+    transform: scale(0.82);
+    opacity: 0.7;
   }
 }
 
@@ -511,70 +597,134 @@
     transform: scaleY(1);
   }
   97% {
-    transform: scaleY(0.12);
+    transform: scaleY(0.1);
   }
 }
 
-@keyframes robot-hop {
-  0% {
-    transform: translateY(0) scale(1, 1);
+@keyframes robot-noticed-face {
+  0%,
+  44% {
+    opacity: 1;
   }
-  40% {
-    transform: translateY(-7px) scale(0.97, 1.03);
-  }
+  56%,
   100% {
-    transform: translateY(0) scale(1, 1);
-  }
-}
-
-@keyframes robot-magnify {
-  from {
-    transform: rotate(35deg) translateY(6px);
     opacity: 0;
   }
+}
+
+@keyframes robot-noticed-alert {
+  0%,
+  44% {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes robot-sweep {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
   to {
-    transform: none;
+    opacity: 1;
+    transform: translate3d(104px, 0, 0);
+  }
+}
+
+@keyframes robot-think-dots {
+  0%,
+  46%,
+  100% {
+    opacity: 1;
+  }
+  50%,
+  96% {
+    opacity: 0;
+  }
+}
+
+@keyframes robot-think-ring {
+  0%,
+  46%,
+  100% {
+    opacity: 0;
+  }
+  50%,
+  96% {
     opacity: 1;
   }
 }
 
-@keyframes robot-pulse {
+@keyframes robot-dot {
   0%,
   100% {
-    transform: scale(1);
-    opacity: 0.6;
+    transform: scale(0.65);
+    opacity: 0.45;
   }
   50% {
-    transform: scale(1.3);
+    transform: scale(1.15);
     opacity: 1;
   }
 }
 
-@keyframes robot-bounce {
-  from {
-    transform: translateY(0);
-  }
+@keyframes robot-spin {
   to {
-    transform: translateY(-3px);
+    transform: rotate(360deg);
   }
 }
 
 @keyframes robot-talk {
   from {
-    transform: scaleY(0.5);
+    transform: scaleY(0.3);
   }
   to {
-    transform: scaleY(1.6);
+    transform: scaleY(1);
   }
 }
 
-@keyframes robot-question {
+@keyframes robot-talk-bounce {
   0%,
   100% {
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0);
   }
   50% {
-    transform: translateY(-3px);
+    transform: translate3d(0, -2.5px, 0);
+  }
+}
+
+@keyframes robot-404 {
+  0% {
+    transform: none;
+    opacity: 1;
+  }
+  10% {
+    transform: translateX(2.5px);
+  }
+  13% {
+    transform: translateX(-3px) skewX(10deg);
+    opacity: 0.6;
+  }
+  16% {
+    transform: none;
+    opacity: 1;
+  }
+  55% {
+    transform: translateX(-2px);
+  }
+  58% {
+    transform: none;
+    opacity: 0.4;
+  }
+  61% {
+    opacity: 1;
   }
 }
 
@@ -587,27 +737,13 @@
   }
 }
 
-@keyframes robot-shake {
+@keyframes robot-pulse {
   0%,
   100% {
-    transform: rotate(0);
-  }
-  25% {
-    transform: rotate(-7deg);
-  }
-  75% {
-    transform: rotate(7deg);
-  }
-}
-
-@keyframes robot-flicker {
-  from {
-    transform: scaleY(0.88);
-    opacity: 0.85;
-  }
-  to {
-    transform: scaleY(1.08);
     opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
   }
 }
 
@@ -621,175 +757,395 @@
   }
   100% {
     opacity: 0;
-    transform: translate(4px, -6px);
+    transform: translate(4px, -8px);
   }
 }
 
-/* --- Idle play (Mascot.tsx): a short behaviour now and then; CSS only, nothing runs between --- */
-
-.robot__wave-arm {
-  opacity: 0;
-  transform-box: view-box;
-  transform-origin: 101px 88px;
-}
-
-.robot__antenna,
-.robot__line {
-  transform-box: view-box;
-  transform-origin: 70px 27px;
-}
-
-/* wave: the raised arm swings from the shoulder; happy eyes */
-.robot--play-wave .robot__wave-arm {
-  opacity: 1;
-  animation: robot-wave 400ms ease-in-out 4 alternate;
-}
-
-.robot--play-wave .robot__arm--right {
-  opacity: 0;
-}
-
-.robot--play-wave .eyes,
-.robot--play-stretch .eyes {
-  opacity: 0;
-}
-
-.robot--play-wave .eyes.eyes--happy,
-.robot--play-stretch .eyes.eyes--happy,
-.robot--play-spin .eyes.eyes--wide {
-  opacity: 1;
-}
-
-.robot--play-spin .eyes.eyes--relaxed {
-  opacity: 0;
-}
-
-/* spin: a full turn around the robot's middle (it stays inside the window), a little rise,
-   and a thruster burst */
-.robot--play-spin .robot__bank {
-  transform-origin: 70px 72px;
-  animation: robot-spin 1.1s cubic-bezier(0.45, 0, 0.2, 1);
-}
-
-.robot--play-spin .robot__float {
-  animation: robot-rise 1.1s ease-in-out;
-}
-
-.robot--play-spin .robot__thruster {
-  opacity: 1;
-  transform: scaleY(1);
-}
-
-.robot--play-spin .robot__flame {
-  animation: robot-flicker 90ms ease-in-out infinite alternate;
-  transform-box: view-box;
-  transform-origin: 70px 113px;
-}
-
-.robot--play-spin .robot__shadow-wrap {
-  transform: scale(0.7);
-  opacity: 0.6;
-}
-
-/* patrol: a gentle figure of eight around its spot */
-.robot--play-patrol .robot__float {
-  animation: robot-patrol 2.4s ease-in-out;
-}
-
-/* stretch: the antenna reaches up and the body stretches a little */
-.robot--play-stretch .robot__line {
-  animation: robot-stem 1.4s ease-in-out;
-}
-
-.robot--play-stretch .robot__spark {
-  animation: robot-spark-up 1.4s ease-in-out;
-}
-
-.robot--play-stretch .robot__float {
-  animation: robot-stretch 1.4s ease-in-out;
-}
-
-@keyframes robot-wave {
-  from {
-    transform: rotate(-12deg);
-  }
-  to {
-    transform: rotate(14deg);
-  }
-}
-
-@keyframes robot-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes robot-rise {
+@keyframes robot-breathe {
   0%,
   100% {
-    transform: translateY(0);
+    transform: translate3d(0, 0, 0) scale(1, 1);
   }
   50% {
-    transform: translateY(-6px);
+    transform: translate3d(0, 2px, 0) scale(1.025, 0.975);
+  }
+}
+
+@keyframes robot-glance {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  42% {
+    transform: translateX(-7px);
+  }
+  58%,
+  80% {
+    transform: translateX(7px);
+  }
+}
+
+@keyframes robot-yawn {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  40%,
+  62% {
+    transform: scale(0.97, 1.05);
+  }
+}
+
+@keyframes robot-yawn-mouth {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  40%,
+  62% {
+    transform: scaleY(1);
   }
 }
 
 @keyframes robot-patrol {
   0%,
   100% {
-    transform: translate(0, 0);
+    transform: translate3d(0, 0, 0);
   }
   25% {
-    transform: translate(8px, -4px);
+    transform: translate3d(8px, -4px, 0);
   }
   50% {
-    transform: translate(0, -6px);
+    transform: translate3d(0, -6px, 0);
   }
   75% {
-    transform: translate(-8px, -4px);
+    transform: translate3d(-8px, -4px, 0);
   }
 }
 
-@keyframes robot-stem {
+@keyframes robot-greet {
   0%,
   100% {
-    transform: scaleY(1);
+    transform: translate3d(0, 0, 0) rotate(0deg);
   }
-  45%,
+  30% {
+    transform: translate3d(0, -6px, 0) rotate(-4deg);
+  }
+  65% {
+    transform: translate3d(0, -3px, 0) rotate(4deg);
+  }
+}
+
+@keyframes robot-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes robot-holo-boot {
+  0% {
+    opacity: 0;
+    transform: scale3d(1.15, 0.03, 1);
+    filter: var(--holo);
+  }
+  10% {
+    opacity: 0.9;
+    transform: scale3d(1.15, 0.03, 1);
+  }
+  22% {
+    opacity: 0.55;
+    transform: scale3d(1, 1, 1);
+  }
+  30% {
+    opacity: 0.25;
+  }
+  36% {
+    opacity: 0.65;
+  }
+  44% {
+    opacity: 0.35;
+  }
+  52% {
+    opacity: 0.75;
+  }
+  62% {
+    opacity: 0.5;
+  }
+  72% {
+    opacity: 0.9;
+    filter: var(--holo);
+  }
+  100% {
+    opacity: 1;
+    transform: scale3d(1, 1, 1);
+    filter: none;
+  }
+}
+
+@keyframes robot-slices-red {
+  0% {
+    opacity: 0;
+  }
+  22% {
+    opacity: 0.8;
+    clip-path: inset(10% 0 70% 0);
+    transform: translate3d(-4px, 0, 0);
+  }
+  30% {
+    clip-path: inset(45% 0 35% 0);
+    transform: translate3d(5px, 0, 0);
+  }
+  38% {
+    clip-path: inset(70% 0 12% 0);
+    transform: translate3d(-3px, 0, 0);
+  }
+  46% {
+    clip-path: inset(25% 0 55% 0);
+    transform: translate3d(3px, 0, 0);
+  }
+  54% {
+    opacity: 0.6;
+    clip-path: inset(0 0 0 0);
+    transform: translate3d(-2px, 0, 0);
+  }
+  66% {
+    opacity: 0.5;
+    clip-path: inset(55% 0 30% 0);
+    transform: translate3d(2px, 0, 0);
+  }
+  76% {
+    opacity: 0.35;
+    clip-path: inset(0 0 0 0);
+    transform: translate3d(-1px, 0, 0);
+  }
+  86%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes robot-slices-cyan {
+  0% {
+    opacity: 0;
+  }
+  22% {
+    opacity: 0.8;
+    clip-path: inset(30% 0 50% 0);
+    transform: translate3d(4px, 0, 0);
+  }
+  30% {
+    clip-path: inset(62% 0 20% 0);
+    transform: translate3d(-5px, 0, 0);
+  }
+  38% {
+    clip-path: inset(15% 0 65% 0);
+    transform: translate3d(3px, 0, 0);
+  }
+  46% {
+    clip-path: inset(50% 0 28% 0);
+    transform: translate3d(-3px, 0, 0);
+  }
+  54% {
+    opacity: 0.6;
+    clip-path: inset(0 0 0 0);
+    transform: translate3d(2px, 0, 0);
+  }
+  66% {
+    opacity: 0.5;
+    clip-path: inset(20% 0 62% 0);
+    transform: translate3d(-2px, 0, 0);
+  }
+  76% {
+    opacity: 0.35;
+    clip-path: inset(0 0 0 0);
+    transform: translate3d(1px, 0, 0);
+  }
+  86%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes robot-scan {
+  0% {
+    opacity: 0;
+    background-position: 0 0;
+  }
+  15%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    background-position: 0 24px;
+  }
+}
+
+@keyframes robot-scan-pulse {
+  0% {
+    opacity: 0.7;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes robot-holo-exit {
+  0% {
+    opacity: 1;
+    transform: scale3d(1, 1, 1);
+    filter: grayscale(0) sepia(0) hue-rotate(0deg) saturate(1) brightness(1);
+  }
+  15% {
+    opacity: 0.55;
+    filter: var(--holo);
+  }
+  25% {
+    opacity: 0.9;
+  }
+  32% {
+    opacity: 0.4;
+  }
+  45% {
+    opacity: 0.9;
+    transform: scale3d(1, 1, 1);
+  }
+  62% {
+    opacity: 1;
+    transform: scale3d(1.15, 0.03, 1);
+    filter: grayscale(1) sepia(1) hue-rotate(150deg) saturate(3.5) brightness(3);
+  }
+  75% {
+    opacity: 1;
+    transform: scale3d(0.02, 0.03, 1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale3d(0, 0.03, 1);
+    filter: grayscale(1) sepia(1) hue-rotate(150deg) saturate(3.5) brightness(3);
+  }
+}
+
+@keyframes robot-exit-red {
+  0% {
+    opacity: 0.8;
+    clip-path: inset(20% 0 60% 0);
+    transform: translate3d(-5px, 0, 0);
+  }
+  12% {
+    clip-path: inset(55% 0 25% 0);
+    transform: translate3d(4px, 0, 0);
+  }
+  24% {
+    clip-path: inset(5% 0 75% 0);
+    transform: translate3d(-3px, 0, 0);
+  }
+  36% {
+    clip-path: inset(40% 0 40% 0);
+    transform: translate3d(6px, 0, 0);
+  }
+  48%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes robot-exit-cyan {
+  0% {
+    opacity: 0.8;
+    clip-path: inset(60% 0 20% 0);
+    transform: translate3d(5px, 0, 0);
+  }
+  12% {
+    clip-path: inset(10% 0 70% 0);
+    transform: translate3d(-4px, 0, 0);
+  }
+  24% {
+    clip-path: inset(35% 0 45% 0);
+    transform: translate3d(3px, 0, 0);
+  }
+  36% {
+    clip-path: inset(70% 0 10% 0);
+    transform: translate3d(-6px, 0, 0);
+  }
+  48%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes robot-beam {
+  0%,
   60% {
-    transform: scaleY(1.6);
+    opacity: 0;
+    transform: scale(1, 0);
   }
-}
-
-@keyframes robot-spark-up {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  45%,
-  60% {
-    transform: translateY(-6px);
-  }
-}
-
-@keyframes robot-stretch {
-  0%,
-  100% {
+  72% {
+    opacity: 1;
     transform: scale(1, 1);
   }
-  45%,
-  60% {
-    transform: scale(0.98, 1.04);
+  100% {
+    opacity: 0;
+    transform: scale(0.3, 1.3);
   }
 }
 
+@keyframes robot-jitter-red {
+  0% {
+    opacity: 0.7;
+    clip-path: inset(30% 0 50% 0);
+    transform: translate3d(-3px, 0, 0);
+  }
+  35% {
+    clip-path: inset(60% 0 25% 0);
+    transform: translate3d(2px, 0, 0);
+  }
+  70%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes robot-jitter-cyan {
+  0% {
+    opacity: 0.7;
+    clip-path: inset(55% 0 30% 0);
+    transform: translate3d(3px, 0, 0);
+  }
+  35% {
+    clip-path: inset(20% 0 65% 0);
+    transform: translate3d(-2px, 0, 0);
+  }
+  70%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Windows "Animation effects" off: no hover, glitches or plays; appearing and vanishing are a
+   plain fade. Expressions still change. */
 @media (prefers-reduced-motion: reduce) {
   .robot *,
   .robot {
     animation: none !important;
+  }
+
+  .robot--glitch-boot .robot__svg {
+    animation: robot-fade-in 300ms ease-out both !important;
+  }
+
+  .robot--glitch-exit .robot__svg {
+    animation: robot-fade-in 300ms ease-in reverse forwards !important;
+  }
+
+  .glitch,
+  .glitch__scan,
+  .robot__beam {
+    display: none;
   }
 
   .robot__bank {
@@ -799,9 +1155,5 @@
   .robot--bank-left .robot__bank,
   .robot--bank-right .robot__bank {
     transform: none;
-  }
-
-  .robot--paused .robot__z {
-    opacity: 1;
   }
 }

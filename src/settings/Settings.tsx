@@ -16,7 +16,8 @@ interface SettingsData {
   idlePlay: boolean;
   clipboardFallback: boolean;
   clipboardFirstApps: string[];
-  mascotPosition: { x: number; y: number } | null;
+  /** The corner the mascot flew to at the last start (kept by the app). */
+  startCorner: string | null;
 }
 
 interface ClipboardStatus {
@@ -163,7 +164,7 @@ export default function Settings() {
         </label>
         <label className="settings__switch">
           <input type="checkbox" checked={settings.idlePlay} onChange={(e) => save({ idlePlay: e.target.checked })} />
-          <span>Idle play (the mascot waves, spins or stretches now and then)</span>
+          <span>Idle play (the mascot waves, turns around or stretches now and then)</span>
         </label>
         <div className="settings__row">
           <button type="button" onClick={resetMascot}>

@@ -17,7 +17,8 @@ use crate::provider::ollama::OllamaProvider;
 use crate::provider::{DEFAULT_MODEL, Provider};
 use crate::selection::clipboard::{self, ClipboardPolicy};
 use crate::tray;
-use crate::windows::{SETTINGS, mascot};
+use crate::windows::mascot::{self, Corner};
+use crate::windows::SETTINGS;
 
 /// Event emitted to all windows with the new `Settings`.
 pub const SETTINGS_CHANGED: &str = "settings-changed";
@@ -26,13 +27,6 @@ const STORE_FILE: &str = "settings.json";
 const STORE_KEY: &str = "settings";
 const MAX_MODEL_CHARS: usize = 100;
 const MAX_NAME_CHARS: usize = 40;
-
-/// A screen position in physical pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Position {
-    pub x: i32,
-    pub y: i32,
-}
 
 /// Everything the user can change. Missing or unknown fields in a saved file fall back to the
 /// defaults, so files from older versions keep working.
@@ -60,10 +54,11 @@ pub struct Settings {
     pub fly_to_selection: bool,
     /// A time-of-day greeting next to the mascot when the app starts.
     pub greeting: bool,
-    /// Every minute or so of quiet the mascot waves, spins, patrols or stretches.
+    /// Every minute or so of quiet the mascot waves, turns around, patrols or stretches.
     pub idle_play: bool,
-    /// Where the mascot was left. `None`: the bottom-right corner.
-    pub mascot_position: Option<Position>,
+    /// The corner the mascot flew to at the last start, so the next start picks another.
+    /// Not shown in the settings window. (Older versions saved `mascotPosition`; it is ignored.)
+    pub start_corner: Option<Corner>,
 }
 
 impl Default for Settings {
@@ -79,7 +74,7 @@ impl Default for Settings {
             fly_to_selection: true,
             greeting: true,
             idle_play: true,
-            mascot_position: None,
+            start_corner: None,
         }
     }
 }
@@ -218,8 +213,8 @@ pub fn get_settings(window: WebviewWindow, state: State<'_, SettingsState>) -> R
     Ok(state.get())
 }
 
-/// Saves the settings from the window and returns them normalized. The mascot position is
-/// kept as it is: the mascot may have moved since the window loaded.
+/// Saves the settings from the window and returns them normalized. The mascot's start corner is
+/// the app's own, kept as it is.
 #[tauri::command]
 pub fn save_settings(
     window: WebviewWindow,
@@ -229,9 +224,9 @@ pub fn save_settings(
 ) -> Result<Settings, String> {
     only_settings_window(&window)?;
     Ok(state.update(&app, |current| {
-        let position = current.mascot_position;
+        let corner = current.start_corner;
         *current = settings;
-        current.mascot_position = position;
+        current.start_corner = corner;
     }))
 }
 
@@ -289,14 +284,10 @@ pub fn clipboard_status(window: WebviewWindow) -> Result<ClipboardPolicy, String
     Ok(clipboard::policy())
 }
 
+/// Puts the mascot in the bottom-right corner for this session.
 #[tauri::command]
-pub fn reset_mascot_position(
-    window: WebviewWindow,
-    app: AppHandle,
-    state: State<'_, SettingsState>,
-) -> Result<(), String> {
+pub fn reset_mascot_position(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
     only_settings_window(&window)?;
-    state.update(&app, |s| s.mascot_position = None);
     mascot::move_to_corner(&app).map_err(|e| e.to_string())
 }
 
@@ -314,7 +305,7 @@ mod tests {
         assert!(!s.paused && !s.history_enabled);
         assert!(s.clipboard_fallback);
         assert!(s.fly_to_selection && s.greeting && s.idle_play);
-        assert_eq!(s.mascot_position, None);
+        assert_eq!(s.start_corner, None);
     }
 
     #[test]
@@ -372,7 +363,7 @@ mod tests {
 
     #[test]
     fn saved_file_with_missing_and_unknown_fields_loads() {
-        let saved = json!({ "model": "llama3.2:1b", "paused": true, "someOldField": 3 });
+        let saved = json!({ "model": "llama3.2:1b", "paused": true, "mascotPosition": { "x": 1, "y": 2 } });
         let s: Settings = serde_json::from_value(saved).unwrap();
         assert_eq!(s.model, "llama3.2:1b");
         assert!(s.paused);
@@ -382,7 +373,7 @@ mod tests {
 
     #[test]
     fn json_uses_the_names_the_frontend_expects() {
-        let s = Settings { mascot_position: Some(Position { x: -10, y: 20 }), ..Settings::default() };
+        let s = Settings { start_corner: Some(Corner::TopLeft), ..Settings::default() };
         let value = serde_json::to_value(&s).unwrap();
         for key in [
             "model",
@@ -395,10 +386,10 @@ mod tests {
             "flyToSelection",
             "greeting",
             "idlePlay",
-            "mascotPosition",
+            "startCorner",
         ] {
             assert!(value.get(key).is_some(), "missing {key}");
         }
-        assert_eq!(value["mascotPosition"], json!({ "x": -10, "y": 20 }));
+        assert_eq!(value["startCorner"], json!("topLeft"));
     }
 }

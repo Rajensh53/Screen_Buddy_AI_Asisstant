@@ -41,7 +41,10 @@ focused on meaning and translation only.
 - Ollama HTTP API called from Rust (`reqwest`, streaming), behind a `Provider` trait.
 - Default model `qwen3.5:4b`; other models selectable in settings.
 - Settings: `tauri-plugin-store`. History: optional, off by default, local SQLite.
-- Character: placeholder SVG/CSS with states idle, noticed, thinking, talking, cant_read. Rive later.
+- Character: an original SVG/CSS floating robot head (no body) with an OLED visor whose LED face
+  shows the states (idle, noticed, thinking, talking, cant_read, shy, refuse, warning, offline, paused),
+  idle plays, and hologram glitches at start, on Quit and between states. Styled after the reference
+  video in `Muscot Referance/` (style only; nothing copied from it, and it stays out of git).
 
 ## Architecture
 
@@ -66,7 +69,9 @@ Flow: mouse hook -> trigger rules -> UIA reader -> privacy gate -> explainer (ca
 ## Windows (UI)
 
 - **mascot**: small window the size of the character, transparent, frameless,
-  always on top, skip taskbar, draggable. Remembers its position.
+  always on top, skip taskbar, draggable. At every start it appears in the middle of the screen
+  and flies to a random corner (mostly bottom-right, never the same corner twice in a row);
+  a drag sets its spot for the session only. (User decision 2026-10-14; before, it remembered its position.)
 - **popup**: transparent, frameless, always on top, skip taskbar, never focused
   when shown. Placed next to the selection rectangle, kept inside the monitor's work area.
   Hides on the next mouse click outside it. Streams text as it arrives.
