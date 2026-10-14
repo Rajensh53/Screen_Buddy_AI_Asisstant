@@ -167,11 +167,6 @@ button:disabled,
   color: var(--muted);
 }
 
-.settings__note {
-  margin-top: 2px;
-  font-size: 12px;
-}
-
 .settings__ok {
   margin: 6px 0 0;
   color: var(--accent);

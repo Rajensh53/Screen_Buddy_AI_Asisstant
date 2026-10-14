@@ -48,7 +48,7 @@
       },
       {
         "label": "settings",
-        "title": "Screen Buddy settings",
+        "title": "Screen Buddy",
         "url": "src/settings/index.html",
         "width": 480,
         "height": 560,

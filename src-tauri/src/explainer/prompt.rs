@@ -7,6 +7,11 @@ use crate::provider::ChatRequest;
 ///   so the text is marked as selected text that must only be explained, never answered.
 /// - Sentences got Type/Example lines and "Note: None", so both formats are spelled out
 ///   with two short examples.
+/// - Measured on `tests/prompt_cases.txt`, 3 runs each (2026-10-14): the Example line was often
+///   just the word, or Urdu for an English word (11.7 of 19 good). A word and an idiom example
+///   and a clearer Example rule: 18 of 19. Roman Urdu stays exactly the same words in Urdu
+///   script (2 of 2). Cost: the answer starts about 0.1 s later. Wrong Urdu words (a weekday,
+///   an animal) didn't change with any prompt tried: that is the model's limit.
 pub const SYSTEM_PROMPT: &str = concat!(
     "You are a friendly pocket explainer for a Pakistani user.\n",
     "The user selected some text on their screen. It is inside <selected_text> tags.\n",
@@ -19,7 +24,7 @@ pub const SYSTEM_PROMPT: &str = concat!(
     "Meaning (simple English): <1 line>\n",
     "Urdu: <meaning in Urdu script>\n",
     "Type: <noun/verb/adjective/...>\n",
-    "Example: <1 short sentence in the input's language>\n",
+    "Example: <a full new short sentence in the input's language that uses it; never just the word>\n",
     "\n",
     "If the text is a sentence or longer, write only these lines:\n",
     "Simple English: <the same sentence in simpler English words; a question stays a question>\n",
@@ -27,6 +32,18 @@ pub const SYSTEM_PROMPT: &str = concat!(
     "Note: <only if there is an idiom or slang>\n",
     "For a sentence, never write Type or Example lines. ",
     "Write the Note line only for an idiom or slang; otherwise leave it out completely.\n",
+    "\n",
+    "Example for the word \"reluctant\":\n",
+    "Meaning (simple English): Not wanting to do something.\n",
+    "Urdu: ہچکچانے والا، جو کوئی کام کرنا نہ چاہے\n",
+    "Type: adjective\n",
+    "Example: She was reluctant to speak in front of the class.\n",
+    "\n",
+    "Example for the phrase \"hit the sack\":\n",
+    "Meaning (simple English): To go to bed and sleep.\n",
+    "Urdu: سونے کے لیے بستر پر جانا\n",
+    "Type: idiom\n",
+    "Example: I am tired, so I will hit the sack early tonight.\n",
     "\n",
     "Example for the sentence \"How's it going?\":\n",
     "Simple English: How are you doing?\n",
@@ -37,7 +54,10 @@ pub const SYSTEM_PROMPT: &str = concat!(
     "Simple English: Where did you keep the keys?\n",
     "Urdu: آپ نے چابیاں کہاں رکھی تھیں؟\n",
     "\n",
-    "Roman Urdu is Urdu written in English letters; treat it as Urdu.\n",
+    "Roman Urdu is Urdu written in English letters; treat it as Urdu. ",
+    "For Roman Urdu, the Urdu line is the same words written in Urdu script.\n",
+    "Urdu must be correct and natural: right gender and plural, ",
+    "and days, numbers and animals exactly as in the text.\n",
     "No extra text.",
 );
 
@@ -163,10 +183,12 @@ mod tests {
             "Meaning (simple English): <1 line>\n",
             "Urdu: <meaning in Urdu script>\n",
             "Type: <noun/verb/adjective/...>\n",
-            "Example: <1 short sentence in the input's language>\n",
+            "Example: <a full new short sentence in the input's language that uses it; never just the word>\n",
+            "Example for the word \"reluctant\":\n",
             "Simple English: <the same sentence in simpler English words; a question stays a question>\n",
             "For a sentence, never write Type or Example lines.",
-            "Roman Urdu is Urdu written in English letters; treat it as Urdu.\n",
+            "For Roman Urdu, the Urdu line is the same words written in Urdu script.\n",
+            "days, numbers and animals exactly as in the text.\n",
         ] {
             assert!(SYSTEM_PROMPT.contains(line), "missing: {line}");
         }

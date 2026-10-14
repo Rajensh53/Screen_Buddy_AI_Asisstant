@@ -40,8 +40,6 @@ pub struct Settings {
     /// Exe names whose text is never read.
     pub block_list: Vec<String>,
     pub paused: bool,
-    /// Saved now; storing the history itself comes in a later version.
-    pub history_enabled: bool,
     /// When UI Automation can't give the selection (or gives wrong text, as in the Edge/Chrome PDF
     /// viewer), copy it with Ctrl+C and restore the clipboard (see `selection::clipboard`). On by
     /// default; the user can turn it off.
@@ -68,7 +66,6 @@ impl Default for Settings {
             user_name: String::new(),
             block_list: BlockList::defaults().entries(),
             paused: false,
-            history_enabled: false,
             clipboard_fallback: true,
             clipboard_first_apps: Vec::new(),
             fly_to_selection: true,
@@ -302,7 +299,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.model, DEFAULT_MODEL);
         assert!(s.block_list.contains(&"bitwarden.exe".to_owned()));
-        assert!(!s.paused && !s.history_enabled);
+        assert!(!s.paused);
         assert!(s.clipboard_fallback);
         assert!(s.fly_to_selection && s.greeting && s.idle_play);
         assert_eq!(s.start_corner, None);
@@ -363,7 +360,8 @@ mod tests {
 
     #[test]
     fn saved_file_with_missing_and_unknown_fields_loads() {
-        let saved = json!({ "model": "llama3.2:1b", "paused": true, "mascotPosition": { "x": 1, "y": 2 } });
+        // `mascotPosition` and `historyEnabled` were saved by older versions.
+        let saved = json!({ "model": "llama3.2:1b", "paused": true, "mascotPosition": { "x": 1, "y": 2 }, "historyEnabled": true });
         let s: Settings = serde_json::from_value(saved).unwrap();
         assert_eq!(s.model, "llama3.2:1b");
         assert!(s.paused);
@@ -380,7 +378,6 @@ mod tests {
             "userName",
             "blockList",
             "paused",
-            "historyEnabled",
             "clipboardFallback",
             "clipboardFirstApps",
             "flyToSelection",

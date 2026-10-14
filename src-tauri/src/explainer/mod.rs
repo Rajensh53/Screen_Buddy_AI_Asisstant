@@ -230,4 +230,28 @@ mod tests {
         assert_eq!(explain(&explainer, "word").0, Ok(Explained::Cached));
         assert_eq!(calls(&explainer), 1);
     }
+
+    /// Prints the app's real answers for `tests/prompt_cases.txt` from the local Ollama, to check a
+    /// prompt change by eye. Not part of the normal run (needs Ollama with the default model):
+    /// `cargo test prompt_eval -- --ignored --nocapture`
+    #[test]
+    #[ignore = "asks the local Ollama"]
+    fn prompt_eval() {
+        use crate::provider::DEFAULT_MODEL;
+        use crate::provider::ollama::OllamaProvider;
+
+        let explainer = Explainer::new(OllamaProvider::new().expect("HTTP client"), DEFAULT_MODEL);
+        let cases = include_str!("../../tests/prompt_cases.txt");
+        for text in cases.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let start = std::time::Instant::now();
+            let mut answer = String::new();
+            let result = block_on(explainer.explain(text, |p| answer.push_str(p)));
+            let seconds = start.elapsed().as_secs_f64();
+            println!("--- {text} ({seconds:.2}s)\n{answer}");
+            if let Err(err) = result {
+                println!("ERROR: {err}");
+            }
+            println!();
+        }
+    }
 }

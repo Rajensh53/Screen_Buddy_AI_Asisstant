@@ -10,7 +10,6 @@ interface SettingsData {
   userName: string;
   blockList: string[];
   paused: boolean;
-  historyEnabled: boolean;
   flyToSelection: boolean;
   greeting: boolean;
   idlePlay: boolean;
@@ -216,15 +215,6 @@ export default function Settings() {
             Restore defaults
           </button>
         </div>
-        <label className="settings__switch">
-          <input
-            type="checkbox"
-            checked={settings.historyEnabled}
-            onChange={(e) => save({ historyEnabled: e.target.checked })}
-          />
-          <span>Keep a history of explanations</span>
-        </label>
-        <p className="settings__muted settings__note">Saving history comes in a later version.</p>
       </section>
 
       <section className="settings__section">

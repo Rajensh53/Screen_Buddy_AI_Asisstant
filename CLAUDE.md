@@ -40,7 +40,7 @@ focused on meaning and translation only.
   - Low-level mouse hook (`WH_MOUSE_LL`) on its own thread with a message loop; COM initialized on the UIA thread.
 - Ollama HTTP API called from Rust (`reqwest`, streaming), behind a `Provider` trait.
 - Default model `qwen3.5:4b`; other models selectable in settings.
-- Settings: `tauri-plugin-store`. History: optional, off by default, local SQLite.
+- Settings: `tauri-plugin-store`. No history of explanations (removed at the user's request, 2026-10-14).
 - Character: an original SVG/CSS floating robot head (no body) with an OLED visor whose LED face
   shows the states (idle, noticed, thinking, talking, cant_read, shy, refuse, warning, offline, paused),
   idle plays, and hologram glitches only at start and on Quit (user decision 2026-10-14). Styled after the reference
@@ -75,7 +75,8 @@ Flow: mouse hook -> trigger rules -> UIA reader -> privacy gate -> explainer (ca
 - **popup**: transparent, frameless, always on top, skip taskbar, never focused
   when shown. Placed next to the selection rectangle, kept inside the monitor's work area.
   Hides on the next mouse click outside it. Streams text as it arrives.
-- **settings**: normal window opened from the tray menu.
+- **settings**: normal window opened from the tray menu. It is also the app's taskbar button: it starts
+  minimized on the taskbar (without taking focus), and closing it minimizes it back. (User decision 2026-10-14.)
 - **tray**: Settings, Pause/Resume, Quit.
 
 ## Trigger rules
@@ -101,13 +102,15 @@ If the text is a single word or short phrase, write exactly these 4 lines:
   Meaning (simple English): <1 line>
   Urdu: <meaning in Urdu script>
   Type: <noun/verb/adjective/...>
-  Example: <1 short sentence in the input's language>
+  Example: <a full new short sentence in the input's language that uses it; never just the word>
 If the text is a sentence or longer, write only these lines:
   Simple English: <the same sentence in simpler English words; a question stays a question>
   Urdu: <translation in Urdu script; a question stays a question>
   Note: <only if there is an idiom or slang; otherwise leave this line out>
-(plus two short sentence examples)
+(plus examples: a word, an idiom and two sentences)
 Roman Urdu is Urdu written in English letters; treat it as Urdu.
+For Roman Urdu, the Urdu line is the same words written in Urdu script.
+Urdu must be correct and natural: right gender and plural, and days, numbers and animals exactly as in the text.
 No extra text.
 ```
 
@@ -115,6 +118,9 @@ The user message is the selected text wrapped in `<selected_text>` tags. The mod
 selected text, never answer it (a selected question once got answered instead of explained).
 
 Options: temperature 0.2, thinking off, `keep_alive` 30m, streaming.
+To check a prompt change: `cargo test prompt_eval -- --ignored --nocapture` (in `src-tauri`) prints the
+answers for `src-tauri/tests/prompt_cases.txt` from the local Ollama. Compare several runs: answers vary
+from run to run, so one run proves nothing.
 The popup must render Urdu right-to-left with a font that supports Urdu.
 
 ## Phase 1 tasks (do in order, one per session)
@@ -128,7 +134,7 @@ The popup must render Urdu right-to-left with a font that supports Urdu.
 5. `explainer/`: prompt building, in-memory LRU cache, unit tests.
 6. Wire it together: popup positioned at the selection rect, streams the answer, hides on outside click.
    Mascot switches states on events.
-7. Settings: model name, block list, pause, history on/off (persisted).
+7. Settings: model name, block list, pause (persisted). (History on/off was removed on 2026-10-14.)
 
 Later phases: character art and animation, installer and
 code signing, first-run Ollama setup, auto-update, then agent features.
