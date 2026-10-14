@@ -61,7 +61,7 @@
     0 4px 12px rgba(2, 6, 23, 0.45),
     0 0 0 1px rgba(56, 189, 248, 0.05);
   overflow-y: auto;
-  font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  font: 14px/1.5 "Nunito", "Segoe UI", system-ui, sans-serif;
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
 }
@@ -297,9 +297,10 @@ button {
 .popup__line--rtl .popup__value {
   text-align: right;
   unicode-bidi: plaintext;
-  font-family: "Segoe UI", system-ui, "Noto Nastaliq Urdu", sans-serif;
-  font-size: 16px;
-  line-height: 1.9;
+  /* Nastaliq slopes down each word, so it needs a taller line than Latin text. */
+  font-family: "Noto Nastaliq Urdu", "Segoe UI", system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 2.4;
 }
 
 .popup__error {

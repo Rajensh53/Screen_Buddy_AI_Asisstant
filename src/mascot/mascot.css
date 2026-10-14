@@ -146,13 +146,13 @@
 
 .robot__question {
   fill: #38bdf8;
-  font: 700 22px "Segoe UI", system-ui, sans-serif;
+  font: 700 22px "Nunito", "Segoe UI", system-ui, sans-serif;
   filter: url(#sb-glow);
 }
 
 .robot__z {
   fill: #93c5fd;
-  font: 700 12px "Segoe UI", system-ui, sans-serif;
+  font: 700 12px "Nunito", "Segoe UI", system-ui, sans-serif;
 }
 
 .robot__z--1 {

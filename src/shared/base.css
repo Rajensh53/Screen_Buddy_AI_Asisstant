@@ -17,7 +17,7 @@ body,
 }
 
 body {
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: "Nunito", "Segoe UI", system-ui, sans-serif;
   user-select: none;
   -webkit-user-select: none;
 }
