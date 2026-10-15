@@ -10,7 +10,9 @@ publish = false
 # The `_lib` suffix keeps the lib name distinct from the bin name,
 # see https://github.com/rust-lang/cargo/issues/8519
 name = "screen_buddy_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Windows desktop only: `main.rs` links the `rlib`. The template's `staticlib` (iOS) and `cdylib`
+# (Android) made an 841 MB .lib on every debug build without being used.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

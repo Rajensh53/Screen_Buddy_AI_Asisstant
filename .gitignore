@@ -20,3 +20,6 @@ __pycache__/
 
 # Style references for the mascot (stock renders and a video; never shipped)
 Muscot Referance/
+
+# Launch videos (brag): kept on this PC only, never in git
+brag-output*/
