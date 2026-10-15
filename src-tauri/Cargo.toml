@@ -3,6 +3,8 @@ name = "screen-buddy"
 version = "0.1.0"
 description = "A small on-screen buddy that explains and translates selected text with a local model"
 authors = ["Rajnesh Kumar Charan"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Rajensh53/Screen_Buddy_AI_Asisstant"
 edition = "2024"
 publish = false
 

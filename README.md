@@ -38,6 +38,7 @@ https://github.com/user-attachments/assets/aa4483bb-1104-4af5-9df5-141220b02450
   - [Prerequisites](#prerequisites) · [Run it](#run-it) · [Checks](#checks) · [Project structure](#project-structure)
   - [How it works](#how-it-works) · [Rules the code keeps](#rules-the-code-keeps) · [The prompt](#the-prompt) · [Build the installer](#build-the-installer)
 - [Tech stack](#tech-stack)
+- [License](#license)
 
 ---
 
@@ -299,6 +300,18 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
   clipboard, DWM
 - **Model:** [Ollama](https://ollama.com), default `qwen3.5:4b`, streamed over its local HTTP API
 - **Fonts:** Nunito and Noto Nastaliq Urdu (SIL Open Font License), bundled with the app
+
+## License
+
+Screen Buddy is free software: you can redistribute it and/or modify it under the terms of the
+[GNU General Public License v3.0](LICENSE) or (at your option) any later version. If you share a modified
+version, you must share its source code under the same license.
+
+The name **"Screen Buddy"** and the robot character's design (its look, face and logo) are not covered by this
+license: forks must use their own name and character. Contributions are welcome under the terms in
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+Copyright © 2026 Rajnesh Kumar Charan
 
 <div align="center">
 <sub>Made for reading in English without leaving the page.</sub>
