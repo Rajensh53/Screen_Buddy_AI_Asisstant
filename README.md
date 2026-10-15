@@ -16,6 +16,11 @@ Runs 100% on your PC with a local model through [Ollama](https://ollama.com). No
 
 <!-- Full intro video: edit this README on github.com and drag the video file onto this line.
      GitHub uploads it and inserts a link that plays right here in the README. -->
+     
+
+https://github.com/user-attachments/assets/aa4483bb-1104-4af5-9df5-141220b02450
+
+
 
 </div>
 
